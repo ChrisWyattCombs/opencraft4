@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Create World</title>
+  <link rel="stylesheet" href="menu.css">
+</head>
+<body>
+  <div class="shade"></div>
+  <div class="screen">
+    <div class="panel">
+      <h1 class="title">Create New World</h1>
+      <div class="field">
+        <label for="worldName">World Name</label>
+        <input id="worldName" type="text" value="New World" maxlength="32" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="worldSeed">Seed</label>
+        <input id="worldSeed" type="text" placeholder="Leave blank for random" maxlength="64" spellcheck="false">
+      </div>
+      <div class="row">
+        <button class="btn secondary" onclick="goSingleplayer()">Back</button>
+        <button class="btn" onclick="submitCreateWorld()">Create</button>
+      </div>
+      <p class="hint">Create is wired up, but world generation is not implemented yet.</p>
+    </div>
+  </div>
+  <script src="menu.js"></script>
+</body>
+</html>

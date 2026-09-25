@@ -1,0 +1,13 @@
+target/
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+run/
+*.log
+.DS_Store
+cp.txt
+natives/ultralight/
+natives/ultralight-legacy/
+natives/*.7z
