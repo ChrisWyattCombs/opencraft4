@@ -22,10 +22,12 @@ public final class Main {
   public static void main(String[] args) throws Exception {
     Configuration.STACK_SIZE.set(1024 * 1024);
     Path projectRoot = Path.of("").toAbsolutePath();
+    DiagLog.init(projectRoot);
     Path crashLog = projectRoot.resolve("run").resolve("crash.log");
     Thread.setDefaultUncaughtExceptionHandler(
         (thread, error) -> {
           error.printStackTrace();
+          DiagLog.log("UNCAUGHT thread=" + thread.getName() + " " + error);
           try {
             Files.createDirectories(crashLog.getParent());
             try (PrintWriter out =
@@ -43,12 +45,16 @@ public final class Main {
           }
         });
 
+    DiagLog.log("main start");
     try (Display display = new Display()) {
       display.createWindow("Opencraft4");
+      DiagLog.log("window ok");
       display.initVulkan();
+      DiagLog.log("vulkan ok rtSupported=" + display.getVulkanContext().isRayTracingSupported());
 
       try (GameController controller = new GameController(display, projectRoot)) {
         controller.init();
+        DiagLog.log("controller init ok");
         long lastFrame = System.nanoTime();
         while (!display.shouldClose()) {
           display.pollEvents();
@@ -56,7 +62,11 @@ public final class Main {
           lastFrame = System.nanoTime();
           controller.tick(dt);
         }
+        DiagLog.log("main loop exit clean");
       }
+    } catch (Throwable t) {
+      DiagLog.log("main fatal " + t);
+      throw t;
     }
   }
 

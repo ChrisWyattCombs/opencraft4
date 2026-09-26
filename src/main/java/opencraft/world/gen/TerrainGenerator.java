@@ -36,6 +36,18 @@ public final class TerrainGenerator {
   /** Shared water surface height for oceans, lakes, and rivers. */
   private static final int SEA_LEVEL = 62;
 
+  /**
+   * Lightweight column sample for distant LOD meshes (no trees / full voxel fill).
+   *
+   * @param surfaceY solid surface height
+   * @param surfaceId top block id
+   * @param subsurfaceId subsurface block id
+   * @param flooded {@code true} when surface is under sea level
+   * @param continentalness climate shelf value used for beaches
+   */
+  public record ColumnSample(
+      int surfaceY, byte surfaceId, byte subsurfaceId, boolean flooded, double continentalness) {}
+
   private final long seed;
   private final PerlinNoise heightNoise;
   private final PerlinNoise detailNoise;
@@ -68,6 +80,57 @@ public final class TerrainGenerator {
   }
 
   /**
+   * Returns the shared water / sea surface height used by generation and distant LOD.
+   *
+   * @return sea level Y
+   */
+  public static int seaLevel() {
+    return SEA_LEVEL;
+  }
+
+  /**
+   * Samples height and surface materials at a world column without writing voxels.
+   *
+   * <p>Used by distant-horizon style LOD meshes so far terrain matches nearby generation without
+   * loading full chunks into memory.
+   *
+   * @param worldX world block X
+   * @param worldZ world block Z
+   * @return column surface sample
+   */
+  public ColumnSample sampleColumn(int worldX, int worldZ) {
+    double[] climateXZ = warpClimateCoords(worldX, worldZ);
+    double continentalness =
+        sampleClimate(continentalNoise, climateXZ[0], climateXZ[1], CONTINENT_SCALE);
+    double moisture =
+        stretchClimate(sampleClimate(moistureNoise, climateXZ[0], climateXZ[1], CLIMATE_SCALE));
+
+    double hillRise = sampleHillRise(worldX, worldZ);
+    double height =
+        sampleGround(worldX, worldZ, continentalness)
+            + hillRise * 30.0
+            - coastDrop(continentalness)
+            - lakeBasin(moisture, continentalness)
+            - riverCarve(worldX, worldZ, moisture, continentalness);
+
+    int surfaceY = clamp((int) Math.round(height), 1, Chunk.SIZE_Y - 2);
+    boolean flooded = surfaceY < SEA_LEVEL;
+
+    Biome biome = pickSurfaceBiome(worldX, worldZ);
+    Block surface = biome.getSurfaceBlock();
+    Block subsurface = biome.getSubsurfaceBlock();
+    if (!flooded && surfaceY <= SEA_LEVEL + 2 && continentalness < 0.12) {
+      surface = BlockRegistry.getInstance().get(BlockIds.SAND);
+      subsurface = surface;
+    } else if (flooded && !biome.isAquatic()) {
+      surface = BlockRegistry.getInstance().get(BlockIds.SAND);
+      subsurface = BlockRegistry.getInstance().get(BlockIds.DIRT);
+    }
+    return new ColumnSample(
+        surfaceY, surface.getId(), subsurface.getId(), flooded, continentalness);
+  }
+
+  /**
    * Generates voxel data for one chunk.
    *
    * @param chunk chunk to fill
@@ -81,37 +144,11 @@ public final class TerrainGenerator {
       for (int lx = 0; lx < Chunk.SIZE_X; lx++) {
         int worldX = baseWorldX + lx;
         int worldZ = baseWorldZ + lz;
-        double[] climateXZ = warpClimateCoords(worldX, worldZ);
-        double continentalness =
-            sampleClimate(continentalNoise, climateXZ[0], climateXZ[1], CONTINENT_SCALE);
-        double moisture =
-            stretchClimate(sampleClimate(moistureNoise, climateXZ[0], climateXZ[1], CLIMATE_SCALE));
-
-        double hillRise = sampleHillRise(worldX, worldZ);
-
-        // Continuous height: land rolls into the sea; hills ease in/out with the mask.
-        double height =
-            sampleGround(worldX, worldZ, continentalness)
-                + hillRise * 30.0
-                - coastDrop(continentalness)
-                - lakeBasin(moisture, continentalness)
-                - riverCarve(worldX, worldZ, moisture, continentalness);
-
-        int surfaceY = clamp((int) Math.round(height), 1, Chunk.SIZE_Y - 2);
-        boolean flooded = surfaceY < SEA_LEVEL;
-
-        Biome biome = pickSurfaceBiome(worldX, worldZ);
-
-        Block surface = biome.getSurfaceBlock();
-        Block subsurface = biome.getSubsurfaceBlock();
-        // Beaches where land meets the waterline.
-        if (!flooded && surfaceY <= SEA_LEVEL + 2 && continentalness < 0.12) {
-          surface = BlockRegistry.getInstance().get(BlockIds.SAND);
-          subsurface = surface;
-        } else if (flooded && !biome.isAquatic()) {
-          surface = BlockRegistry.getInstance().get(BlockIds.SAND);
-          subsurface = BlockRegistry.getInstance().get(BlockIds.DIRT);
-        }
+        ColumnSample column = sampleColumn(worldX, worldZ);
+        int surfaceY = column.surfaceY();
+        boolean flooded = column.flooded();
+        byte surfaceId = column.surfaceId();
+        byte subsurfaceId = column.subsurfaceId();
 
         byte stoneId = BlockIds.STONE;
         byte waterId = BlockIds.WATER;
@@ -127,9 +164,9 @@ public final class TerrainGenerator {
               id = BlockIds.AIR;
             }
           } else if (y == surfaceY) {
-            id = surface.getId();
+            id = surfaceId;
           } else if (y >= surfaceY - 3) {
-            id = subsurface.getId();
+            id = subsurfaceId;
           } else {
             id = stoneId;
           }
@@ -138,10 +175,10 @@ public final class TerrainGenerator {
 
         boolean canFitTree = lx >= 2 && lx < Chunk.SIZE_X - 2 && lz >= 2 && lz < Chunk.SIZE_Z - 2;
         boolean onTreeCell = Math.floorMod(worldX, 4) == 1 && Math.floorMod(worldZ, 4) == 1;
-        // Trees only in grassy forests — never desert, beaches, plains, or hills.
+        Biome biome = pickSurfaceBiome(worldX, worldZ);
         if (!flooded
             && "Forest".equals(biome.getName())
-            && surface.getId() == BlockIds.GRASS
+            && surfaceId == BlockIds.GRASS
             && biome.treeChance() > 0.0
             && canFitTree
             && onTreeCell
@@ -326,6 +363,36 @@ public final class TerrainGenerator {
 
   private static double clamp(double value, double min, double max) {
     return Math.max(min, Math.min(max, value));
+  }
+
+  /**
+   * Returns whether a forest tree would be placed at this column (same rules as chunk generation).
+   *
+   * @param worldX world block X
+   * @param worldZ world block Z
+   * @return {@code true} if a tree belongs here
+   */
+  public boolean shouldPlaceTreeAt(int worldX, int worldZ) {
+    if (Math.floorMod(worldX, 4) != 1 || Math.floorMod(worldZ, 4) != 1) {
+      return false;
+    }
+    ColumnSample column = sampleColumn(worldX, worldZ);
+    if (column.flooded() || column.surfaceY() < SEA_LEVEL || column.surfaceId() != BlockIds.GRASS) {
+      return false;
+    }
+    Biome biome = pickSurfaceBiome(worldX, worldZ);
+    return "Forest".equals(biome.getName())
+        && biome.treeChance() > 0.0
+        && shouldPlaceTree(worldX, worldZ, biome.treeChance());
+  }
+
+  /**
+   * Trunk height used by {@link #placeTree} / distant LOD tree proxies.
+   *
+   * @return trunk block count
+   */
+  public static int treeTrunkHeight() {
+    return 5;
   }
 
   /**

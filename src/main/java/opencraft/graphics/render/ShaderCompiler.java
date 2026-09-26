@@ -3,14 +3,21 @@ package opencraft.graphics.render;
 import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.util.shaderc.Shaderc.shaderc_compilation_status_success;
 import static org.lwjgl.util.shaderc.Shaderc.shaderc_compile_into_spv;
+import static org.lwjgl.util.shaderc.Shaderc.shaderc_compile_options_initialize;
+import static org.lwjgl.util.shaderc.Shaderc.shaderc_compile_options_release;
+import static org.lwjgl.util.shaderc.Shaderc.shaderc_compile_options_set_target_env;
+import static org.lwjgl.util.shaderc.Shaderc.shaderc_compile_options_set_target_spirv;
 import static org.lwjgl.util.shaderc.Shaderc.shaderc_compiler_initialize;
 import static org.lwjgl.util.shaderc.Shaderc.shaderc_compiler_release;
+import static org.lwjgl.util.shaderc.Shaderc.shaderc_env_version_vulkan_1_2;
 import static org.lwjgl.util.shaderc.Shaderc.shaderc_fragment_shader;
 import static org.lwjgl.util.shaderc.Shaderc.shaderc_result_get_bytes;
 import static org.lwjgl.util.shaderc.Shaderc.shaderc_result_get_compilation_status;
 import static org.lwjgl.util.shaderc.Shaderc.shaderc_result_get_error_message;
 import static org.lwjgl.util.shaderc.Shaderc.shaderc_result_get_length;
 import static org.lwjgl.util.shaderc.Shaderc.shaderc_result_release;
+import static org.lwjgl.util.shaderc.Shaderc.shaderc_spirv_version_1_4;
+import static org.lwjgl.util.shaderc.Shaderc.shaderc_target_env_vulkan;
 import static org.lwjgl.util.shaderc.Shaderc.shaderc_vertex_shader;
 
 import java.io.IOException;
@@ -33,13 +40,20 @@ public final class ShaderCompiler {
     CACHE.clear();
     compileGlsl("shaders/world.vert", shaderc_vertex_shader);
     compileGlsl("shaders/world.frag", shaderc_fragment_shader);
+    compileGlsl("shaders/sky.vert", shaderc_vertex_shader);
+    compileGlsl("shaders/sky.frag", shaderc_fragment_shader);
+  }
+
+  /** Drops cached SPIR-V so edited shaders are recompiled. */
+  public static void invalidateCache() {
+    CACHE.clear();
   }
 
   /**
    * Compiles a classpath GLSL resource to SPIR-V bytes.
    *
    * @param resourcePath classpath path such as {@code shaders/world.vert}
-   * @param kind {@link org.lwjgl.util.shaderc.Shaderc#shaderc_vertex_shader} or fragment
+   * @param kind shaderc kind (vertex, fragment, raygen, …)
    * @return heap {@link ByteBuffer} containing SPIR-V (caller must {@link MemoryUtil#memFree})
    */
   public static ByteBuffer compileGlsl(String resourcePath, int kind) {
@@ -55,7 +69,12 @@ public final class ShaderCompiler {
     if (compiler == NULL) {
       throw new IllegalStateException("Failed to initialize Shaderc compiler");
     }
-    long result = shaderc_compile_into_spv(compiler, source, kind, resourcePath, "main", NULL);
+    long options = shaderc_compile_options_initialize();
+    // RT shaders need Vulkan 1.2 + SPIR-V 1.4; raster shaders are fine with the same target.
+    shaderc_compile_options_set_target_env(
+        options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
+    shaderc_compile_options_set_target_spirv(options, shaderc_spirv_version_1_4);
+    long result = shaderc_compile_into_spv(compiler, source, kind, resourcePath, "main", options);
     try {
       if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) {
         throw new IllegalStateException(
@@ -71,6 +90,7 @@ public final class ShaderCompiler {
       return bytes;
     } finally {
       shaderc_result_release(result);
+      shaderc_compile_options_release(options);
       shaderc_compiler_release(compiler);
     }
   }

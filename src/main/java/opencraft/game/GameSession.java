@@ -8,6 +8,7 @@ import static org.lwjgl.glfw.GLFW.GLFW_KEY_D;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F11;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_F8;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_LEFT_SHIFT;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT_SHIFT;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_S;
@@ -40,16 +41,22 @@ public final class GameSession implements AutoCloseable {
   private final Player player;
   private final WorldRenderer worldRenderer;
 
-  /** Start small so the first frames leave the loading screen immediately; grows while playing. */
-  private int renderDistance = 4;
+  /** Full-detail voxel chunks around the player (Chebyshev radius). */
+  private int renderDistance = 8;
 
-  private int targetRenderDistance = 16;
+  /** Target near radius (starts at 8; no ramp unless raised later). */
+  private int targetRenderDistance = 8;
+
+  /** Distant Horizons–style LOD horizon in chunk units (visual only). */
+  private int lodRenderDistance = 128;
 
   private double lastMouseX;
   private double lastMouseY;
   private boolean mouseInitialized;
   private boolean flyKeyWasDown;
   private boolean fullscreenKeyWasDown;
+  private boolean rayTraceKeyWasDown;
+  private boolean rayTraceUnavailableLogged;
   private boolean escapeKeyWasDown;
   private boolean returnToMenuRequested;
 
@@ -155,12 +162,21 @@ public final class GameSession implements AutoCloseable {
   }
 
   /**
-   * Returns the render distance in chunks.
+   * Returns the near (full-detail) render distance in chunks.
    *
    * @return chunk radius
    */
   public int getRenderDistance() {
     return renderDistance;
+  }
+
+  /**
+   * Returns the distant LOD horizon in chunks.
+   *
+   * @return LOD chunk radius
+   */
+  public int getLodRenderDistance() {
+    return lodRenderDistance;
   }
 
   /**
@@ -247,6 +263,18 @@ public final class GameSession implements AutoCloseable {
     }
     fullscreenKeyWasDown = fullscreenDown;
 
+    boolean rtKeyDown = glfwGetKey(window, GLFW_KEY_F8) == GLFW_PRESS;
+    if (rtKeyDown && !rayTraceKeyWasDown) {
+      if (worldRenderer.isRayTracingSupported()) {
+        worldRenderer.setRayTracingEnabled(!worldRenderer.isRayTracingEnabled());
+      } else if (!rayTraceUnavailableLogged) {
+        rayTraceUnavailableLogged = true;
+        System.out.println(
+            "[Opencraft] Ray tracing unavailable on this GPU (need VK_KHR_ray_tracing_pipeline)");
+      }
+    }
+    rayTraceKeyWasDown = rtKeyDown;
+
     double[] x = new double[1];
     double[] y = new double[1];
     glfwGetCursorPos(window, x, y);
@@ -266,14 +294,14 @@ public final class GameSession implements AutoCloseable {
     if (renderDistance < targetRenderDistance) {
       renderDistance++;
     }
-    worldRenderer.syncChunks(player, renderDistance);
+    worldRenderer.syncChunks(player, renderDistance, lodRenderDistance);
 
     // Periodically save + unload far chunks (hysteresis keeps border stable).
     if (++unloadTimer >= 20) {
       unloadTimer = 0;
       int pcx = Math.floorDiv((int) Math.floor(player.getX()), Chunk.SIZE_X);
       int pcz = Math.floorDiv((int) Math.floor(player.getZ()), Chunk.SIZE_Z);
-      world.unloadFarChunks(new ChunkPos(pcx, pcz), renderDistance + 2);
+      world.unloadFarSections(new ChunkPos(pcx, pcz), renderDistance + 8, 8);
     }
   }
 

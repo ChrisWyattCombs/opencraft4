@@ -38,6 +38,21 @@ public final class ChunkFrustum {
   }
 
   /**
+   * Returns whether an arbitrary AABB may intersect the view frustum.
+   *
+   * @param minX min X
+   * @param minY min Y
+   * @param minZ min Z
+   * @param maxX max X
+   * @param maxY max Y
+   * @param maxZ max Z
+   * @return {@code true} if not fully outside
+   */
+  public boolean testAab(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
+    return frustum.testAab(minX, minY, minZ, maxX, maxY, maxZ);
+  }
+
+  /**
    * Builds a projection-view matrix matching {@link WorldRenderer} camera conventions.
    *
    * @param player camera
@@ -46,9 +61,22 @@ public final class ChunkFrustum {
    * @return {@code out}
    */
   public static Matrix4f buildProjView(Player player, float aspect, Matrix4f out) {
+    return buildProjView(player, aspect, 512f, out);
+  }
+
+  /**
+   * Builds a projection-view matrix with an explicit far plane (for long-horizon LOD).
+   *
+   * @param player camera
+   * @param aspect width/height
+   * @param farPlane perspective far clip
+   * @param out destination matrix
+   * @return {@code out}
+   */
+  public static Matrix4f buildProjView(Player player, float aspect, float farPlane, Matrix4f out) {
     Matrix4f proj =
         new Matrix4f()
-            .perspective((float) Math.toRadians(70.0), aspect, 0.05f, 512f)
+            .perspective((float) Math.toRadians(70.0), aspect, 0.05f, Math.max(64f, farPlane))
             .scale(1f, -1f, 1f);
     double[] eyeArr = player.getEyePosition();
     float ex = (float) eyeArr[0];

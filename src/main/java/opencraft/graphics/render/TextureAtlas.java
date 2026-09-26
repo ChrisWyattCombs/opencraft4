@@ -230,42 +230,42 @@ public final class TextureAtlas {
     String lower = path.toLowerCase();
     boolean grassSide = lower.contains("grass_side");
     if (lower.contains("grass_top")) {
-      r = 70;
-      g = 160;
-      b = 55;
+      r = 90;
+      g = 175;
+      b = 130;
     } else if (grassSide) {
-      r = 110;
-      g = 85;
-      b = 45;
-    } else if (lower.contains("dirt")) {
-      r = 120;
-      g = 75;
-      b = 40;
-    } else if (lower.contains("stone")) {
-      r = 120;
-      g = 120;
-      b = 120;
-    } else if (lower.contains("sand")) {
-      r = 210;
-      g = 195;
-      b = 120;
-    } else if (lower.contains("wood_top")) {
       r = 150;
-      g = 110;
-      b = 60;
+      g = 95;
+      b = 55;
+    } else if (lower.contains("dirt")) {
+      r = 145;
+      g = 85;
+      b = 50;
+    } else if (lower.contains("stone")) {
+      r = 110;
+      g = 125;
+      b = 145;
+    } else if (lower.contains("sand")) {
+      r = 230;
+      g = 185;
+      b = 130;
+    } else if (lower.contains("wood_top")) {
+      r = 220;
+      g = 185;
+      b = 120;
     } else if (lower.contains("wood")) {
-      r = 130;
-      g = 90;
-      b = 45;
+      r = 145;
+      g = 95;
+      b = 55;
     } else if (lower.contains("leaves")) {
-      r = 50;
-      g = 130;
-      b = 40;
+      r = 55;
+      g = 150;
+      b = 85;
       a = 220;
     } else if (lower.contains("water")) {
-      r = 40;
-      g = 90;
-      b = 200;
+      r = 50;
+      g = 160;
+      b = 190;
       a = 180;
     } else {
       r = 80 + (hash & 0x7f);
@@ -280,9 +280,9 @@ public final class TextureAtlas {
         int pg = g;
         int pb = b;
         if (grassSide && y < TILE / 4) {
-          pr = 70;
-          pg = 160;
-          pb = 55;
+          pr = 90;
+          pg = 175;
+          pb = 130;
         }
         int n = ((x * 13 + y * 7 + hash) & 7) - 3;
         int i = (y * TILE + x) * 4;

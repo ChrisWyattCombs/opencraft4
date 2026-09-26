@@ -36,11 +36,13 @@ import static org.lwjgl.vulkan.VK10.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 import static org.lwjgl.vulkan.VK10.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 import static org.lwjgl.vulkan.VK10.VK_COMPARE_OP_LESS;
 import static org.lwjgl.vulkan.VK10.VK_CULL_MODE_BACK_BIT;
+import static org.lwjgl.vulkan.VK10.VK_CULL_MODE_NONE;
 import static org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 import static org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 import static org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 import static org.lwjgl.vulkan.VK10.VK_DYNAMIC_STATE_SCISSOR;
 import static org.lwjgl.vulkan.VK10.VK_DYNAMIC_STATE_VIEWPORT;
+import static org.lwjgl.vulkan.VK10.VK_ERROR_DEVICE_LOST;
 import static org.lwjgl.vulkan.VK10.VK_FENCE_CREATE_SIGNALED_BIT;
 import static org.lwjgl.vulkan.VK10.VK_FILTER_LINEAR;
 import static org.lwjgl.vulkan.VK10.VK_FILTER_NEAREST;
@@ -80,6 +82,7 @@ import static org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_TRANSFER_BIT;
 import static org.lwjgl.vulkan.VK10.VK_POLYGON_MODE_FILL;
 import static org.lwjgl.vulkan.VK10.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 import static org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED;
+import static org.lwjgl.vulkan.VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 import static org.lwjgl.vulkan.VK10.VK_SAMPLER_ADDRESS_MODE_REPEAT;
 import static org.lwjgl.vulkan.VK10.VK_SAMPLER_MIPMAP_MODE_NEAREST;
 import static org.lwjgl.vulkan.VK10.VK_SAMPLE_COUNT_1_BIT;
@@ -102,6 +105,7 @@ import static org.lwjgl.vulkan.VK10.vkCmdBeginRenderPass;
 import static org.lwjgl.vulkan.VK10.vkCmdBindDescriptorSets;
 import static org.lwjgl.vulkan.VK10.vkCmdBindPipeline;
 import static org.lwjgl.vulkan.VK10.vkCmdBlitImage;
+import static org.lwjgl.vulkan.VK10.vkCmdDraw;
 import static org.lwjgl.vulkan.VK10.vkCmdEndRenderPass;
 import static org.lwjgl.vulkan.VK10.vkCmdPipelineBarrier;
 import static org.lwjgl.vulkan.VK10.vkCmdSetScissor;
@@ -147,6 +151,7 @@ import static org.lwjgl.vulkan.VK10.vkUnmapMemory;
 import static org.lwjgl.vulkan.VK10.vkUpdateDescriptorSets;
 import static org.lwjgl.vulkan.VK10.vkWaitForFences;
 
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
@@ -157,10 +162,12 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
+import opencraft.DiagLog;
 import opencraft.graphics.Display;
 import opencraft.graphics.GameWindow;
 import opencraft.graphics.VulkanContext;
 import opencraft.graphics.VulkanSwapchain;
+import opencraft.graphics.render.rt.RtWorldPass;
 import opencraft.player.Player;
 import opencraft.world.World;
 import opencraft.world.chunk.Chunk;
@@ -197,11 +204,22 @@ public final class WorldRenderer implements AutoCloseable {
 
   private static final int MAX_FRAMES_IN_FLIGHT = 2;
   private static final int UNIFORM_BUFFER_SIZE = 256;
+  private static final int SKY_UNIFORM_BUFFER_SIZE = 160; // 2×mat4 + 2×vec4
   private static final int VERTEX_STRIDE = 32;
   private static final int COLOR_FORMAT = VK_FORMAT_B8G8R8A8_UNORM;
 
   /** Chunks per side of a merged GPU region mesh (4×4 = 16 chunks / draw). */
   private static final int MESH_REGION = 4;
+
+  /** Chunks per side of one distant LOD heightmap patch. */
+  private static final int LOD_SECTION_CHUNKS = 8;
+
+  /** Shared sun direction (toward sun) for raster sky + RT. */
+  private static final float SUN_X = 0.55f;
+
+  private static final float SUN_Y = 0.82f;
+  private static final float SUN_Z = 0.18f;
+  private static final float SUN_ANGULAR_RADIUS = 0.045f;
 
   private final GameWindow window;
   private final VulkanContext vulkan;
@@ -215,6 +233,9 @@ public final class WorldRenderer implements AutoCloseable {
   private final Set<Long> dirtyRegions = new HashSet<>();
   private final java.util.ArrayList<GpuRegionMesh> pendingMeshFree = new java.util.ArrayList<>();
   private ChunkMeshScheduler meshScheduler;
+  private LodMeshScheduler lodMeshScheduler;
+  private final Map<LodMeshScheduler.LodKey, GpuRegionMesh> lodMeshes = new HashMap<>();
+  private final Set<LodMeshScheduler.LodKey> lodDesired = new HashSet<>();
 
   private ByteBuffer hudPixels;
   private int hudWidth;
@@ -229,9 +250,13 @@ public final class WorldRenderer implements AutoCloseable {
   private long pipelineLayout;
   private long graphicsPipeline;
   private long translucentPipeline;
+  private long skyPipelineLayout;
+  private long skyPipeline;
+  private long skyDescriptorSetLayout;
   private long descriptorSetLayout;
   private long descriptorPool;
   private long[] descriptorSets = new long[0];
+  private long[] skyDescriptorSets = new long[0];
 
   private long colorImage;
   private long colorImageMemory;
@@ -252,9 +277,17 @@ public final class WorldRenderer implements AutoCloseable {
   private long textureImageView;
   private long textureSampler;
 
+  private long sunImage;
+  private long sunImageMemory;
+  private long sunImageView;
+  private long sunSampler;
+
   private long[] uniformBuffers = new long[0];
   private long[] uniformBuffersMemory = new long[0];
   private ByteBuffer[] uniformBuffersMapped = new ByteBuffer[0];
+  private long[] skyUniformBuffers = new long[0];
+  private long[] skyUniformBuffersMemory = new long[0];
+  private ByteBuffer[] skyUniformBuffersMapped = new ByteBuffer[0];
 
   private long commandPool;
   private VkCommandBuffer[] commandBuffers = new VkCommandBuffer[0];
@@ -265,7 +298,13 @@ public final class WorldRenderer implements AutoCloseable {
   private boolean loggedFirstPresent;
   private final ChunkFrustum chunkFrustum = new ChunkFrustum();
   private final Matrix4f projViewScratch = new Matrix4f();
-  private int activeRenderDistance = 4;
+  private int activeRenderDistance = 8;
+  private int activeLodDistance = 256;
+  private RtWorldPass rtPass;
+  private boolean rayTracingEnabled;
+
+  /** Frame counter used by {@link DiagLog} breadcrumbs while RTX primary mode is active. */
+  private int diagRtFrames;
 
   /**
    * Creates a renderer that draws offscreen and presents through {@link Display#presentBGRA}.
@@ -311,19 +350,88 @@ public final class WorldRenderer implements AutoCloseable {
     if (meshScheduler != null) {
       meshScheduler.close();
     }
-    meshScheduler =
-        new ChunkMeshScheduler(Math.max(2, Runtime.getRuntime().availableProcessors() - 1));
+    if (lodMeshScheduler != null) {
+      lodMeshScheduler.close();
+    }
+    int workers = Math.max(2, Runtime.getRuntime().availableProcessors() - 1);
+    meshScheduler = new ChunkMeshScheduler(workers);
+    lodMeshScheduler = new LodMeshScheduler(Math.max(1, workers / 2));
     createCommandPool();
     createRenderPass();
     createDescriptorSetLayout();
+    createSkyDescriptorSetLayout();
     createGraphicsPipeline();
+    createSkyPipeline();
     createOffscreenTargets();
     createTextureResources();
+    createSunTextureResources();
     createUniformBuffers();
+    createSkyUniformBuffers();
     createDescriptorPool();
     createDescriptorSets();
+    createSkyDescriptorSets();
     createCommandBuffers();
     createSyncObjects();
+    if (vulkan.isRayTracingSupported()) {
+      try {
+        rtPass = new RtWorldPass(vulkan, commandPool);
+        rtPass.setTexture(textureImageView, textureSampler);
+        System.out.println("[Opencraft] RTX primary path ready (toggle with F8)");
+      } catch (RuntimeException e) {
+        System.err.println("[Opencraft] RT init failed, raster only: " + e.getMessage());
+        e.printStackTrace();
+        if (rtPass != null) {
+          rtPass.close();
+          rtPass = null;
+        }
+      }
+    }
+  }
+
+  /**
+   * @return whether the GPU/device enabled Vulkan ray tracing
+   */
+  public boolean isRayTracingSupported() {
+    return rtPass != null;
+  }
+
+  /**
+   * @return whether F8 RTX primary mode is currently on
+   */
+  public boolean isRayTracingEnabled() {
+    return rayTracingEnabled && rtPass != null;
+  }
+
+  /**
+   * Enables or disables hardware ray-traced primary visibility.
+   *
+   * @param enabled desired state
+   * @return actual state after the call
+   */
+  public boolean setRayTracingEnabled(boolean enabled) {
+    if (rtPass == null) {
+      rayTracingEnabled = false;
+      DiagLog.log("RTX toggle ignored (no rtPass)");
+      return false;
+    }
+    rayTracingEnabled = enabled;
+    if (rayTracingEnabled) {
+      DiagLog.log("RTX ON begin waitIdle+clear AS");
+      vulkan.waitIdle();
+      for (GpuRegionMesh mesh : regionMeshes.values()) {
+        mesh.clearAccelerationStructures(vulkan);
+      }
+      for (GpuRegionMesh mesh : lodMeshes.values()) {
+        mesh.clearAccelerationStructures(vulkan);
+      }
+      rtPass.markSceneDirty();
+      DiagLog.log("RTX ON ready regions=" + regionMeshes.size() + " lod=" + lodMeshes.size());
+      System.out.println("[Opencraft] RTX mode ON");
+    } else {
+      DiagLog.log("RTX OFF");
+      System.out.println("[Opencraft] RTX mode OFF (raster)");
+    }
+    return rayTracingEnabled;
   }
 
   /**
@@ -337,17 +445,30 @@ public final class WorldRenderer implements AutoCloseable {
     if (meshScheduler != null) {
       meshScheduler.close();
     }
-    meshScheduler =
-        new ChunkMeshScheduler(Math.max(2, Runtime.getRuntime().availableProcessors() - 1));
+    if (lodMeshScheduler != null) {
+      lodMeshScheduler.close();
+    }
+    int workers = Math.max(2, Runtime.getRuntime().availableProcessors() - 1);
+    meshScheduler = new ChunkMeshScheduler(workers);
+    lodMeshScheduler = new LodMeshScheduler(Math.max(1, workers / 2));
   }
 
   /**
-   * Returns how many chunk meshes are currently resident on the GPU.
+   * Returns how many near chunk meshes are currently resident.
    *
    * @return mesh count
    */
   public int getMeshCount() {
     return chunkMeshes.size();
+  }
+
+  /**
+   * Returns how many distant LOD patches are resident on the GPU.
+   *
+   * @return LOD mesh count
+   */
+  public int getLodMeshCount() {
+    return lodMeshes.size();
   }
 
   /**
@@ -366,16 +487,28 @@ public final class WorldRenderer implements AutoCloseable {
   }
 
   /**
-   * Loads nearby chunks and uploads meshes for new or dirty chunks.
+   * Loads nearby full-detail chunks and syncs distant LOD heightmap patches.
    *
    * @param player viewer
-   * @param renderDistance chunk Chebyshev radius
+   * @param renderDistance near chunk Chebyshev radius (full voxels)
    */
   public void syncChunks(Player player, int renderDistance) {
+    syncChunks(player, renderDistance, Math.max(renderDistance * 6, 64));
+  }
+
+  /**
+   * Syncs near voxel meshes and far low-detail LOD terrain.
+   *
+   * @param player viewer
+   * @param nearDistance full-detail chunk radius
+   * @param lodDistance distant LOD horizon in chunk units (visual only; no voxel load)
+   */
+  public void syncChunks(Player player, int nearDistance, int lodDistance) {
     if (world == null || atlas == null || meshScheduler == null) {
       return;
     }
-    this.activeRenderDistance = Math.max(1, renderDistance);
+    this.activeRenderDistance = Math.max(1, nearDistance);
+    this.activeLodDistance = Math.max(this.activeRenderDistance, lodDistance);
     flushPendingMeshFrees();
     int pcx = Math.floorDiv((int) Math.floor(player.getX()), Chunk.SIZE_X);
     int pcz = Math.floorDiv((int) Math.floor(player.getZ()), Chunk.SIZE_Z);
@@ -383,69 +516,89 @@ public final class WorldRenderer implements AutoCloseable {
     if (targetWidth <= 0) {
       aspect = window.getWidth() / (float) Math.max(1, window.getHeight());
     }
-    ChunkFrustum.buildProjView(player, aspect, projViewScratch);
+    float farPlane = Math.max(512f, activeLodDistance * Chunk.SIZE_X * 1.6f);
+    ChunkFrustum.buildProjView(player, aspect, farPlane, projViewScratch);
     chunkFrustum.update(projViewScratch);
 
-    // Pull finished background builds onto the CPU mesh map and mark regions dirty.
-    for (ChunkMeshScheduler.Completed done : meshScheduler.drain(24)) {
+    for (ChunkMeshScheduler.Completed done : meshScheduler.drain(48)) {
       chunkMeshes.put(done.pos(), done.data());
       dirtyRegions.add(regionKey(done.pos()));
-      if (chunkMeshes.size() <= 3) {
-        System.out.println(
-            "[Opencraft] mesh ready "
-                + done.pos()
-                + " o="
-                + done.data().opaqueIndices().length
-                + " t="
-                + done.data().translucentIndices().length);
-      }
     }
 
+    // Claim whole LOD sections that touch the near radius — load every chunk in those sections
+    // (no frustum skip), so we never leave half-drawn rings.
+    int sectionSpan = LOD_SECTION_CHUNKS;
+    int psx = Math.floorDiv(pcx, sectionSpan);
+    int psz = Math.floorDiv(pcz, sectionSpan);
+    int nearSectionRadius = Math.max(1, (activeRenderDistance + sectionSpan - 1) / sectionSpan) + 1;
+    // Keep claimed sections until the whole section is outside near + one section of hysteresis.
+    int keepSectionRadius = nearSectionRadius + 1;
+
     int submits = 0;
-    final int maxSubmitsPerFrame = 24;
+    final int maxSubmitsPerFrame = 48;
+    java.util.HashSet<Long> desiredNearSections = new java.util.HashSet<>();
     outer:
-    for (int radius = 0; radius <= renderDistance; radius++) {
-      for (int cx = pcx - radius; cx <= pcx + radius; cx++) {
-        for (int cz = pcz - radius; cz <= pcz + radius; cz++) {
-          int dist = Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz));
-          if (dist != radius) {
-            continue;
-          }
-          ChunkPos pos = new ChunkPos(cx, cz);
-          if (dist > 1 && !chunkFrustum.testChunk(pos)) {
-            continue;
-          }
-          ChunkMesher.MeshData existing = chunkMeshes.get(pos);
-          Chunk loaded = world.getLoadedChunk(pos);
-          boolean needsBuild = existing == null || (loaded != null && loaded.isDirty());
-          if (!needsBuild) {
-            continue;
-          }
-          if (submits >= maxSubmitsPerFrame) {
-            break outer;
-          }
-          if (meshScheduler.submit(world, pos, atlas)) {
-            submits++;
+    for (int sx = psx - nearSectionRadius; sx <= psx + nearSectionRadius; sx++) {
+      for (int sz = psz - nearSectionRadius; sz <= psz + nearSectionRadius; sz++) {
+        int minCx = sx * sectionSpan;
+        int minCz = sz * sectionSpan;
+        int maxCx = minCx + sectionSpan - 1;
+        int maxCz = minCz + sectionSpan - 1;
+        int nearCorner = sectionNearCorner(pcx, pcz, minCx, minCz, maxCx, maxCz);
+        if (nearCorner > activeRenderDistance) {
+          continue;
+        }
+        desiredNearSections.add(sectionKey(sx, sz));
+        for (int cz = minCz; cz <= maxCz; cz++) {
+          for (int cx = minCx; cx <= maxCx; cx++) {
+            ChunkPos pos = new ChunkPos(cx, cz);
+            ChunkMesher.MeshData existing = chunkMeshes.get(pos);
+            Chunk loaded = world.getLoadedChunk(pos);
+            boolean needsBuild = existing == null || (loaded != null && loaded.isDirty());
+            if (!needsBuild) {
+              continue;
+            }
+            if (submits >= maxSubmitsPerFrame) {
+              break outer;
+            }
+            if (meshScheduler.submit(world, pos, atlas)) {
+              submits++;
+            }
           }
         }
       }
     }
 
-    // Drop far CPU meshes and mark their regions dirty.
+    // Also retain sections still within keep radius (hysteresis) so we don't peel them
+    // chunk-by-chunk.
+    for (int sx = psx - keepSectionRadius; sx <= psx + keepSectionRadius; sx++) {
+      for (int sz = psz - keepSectionRadius; sz <= psz + keepSectionRadius; sz++) {
+        int minCx = sx * sectionSpan;
+        int minCz = sz * sectionSpan;
+        int maxCx = minCx + sectionSpan - 1;
+        int maxCz = minCz + sectionSpan - 1;
+        int nearCorner = sectionNearCorner(pcx, pcz, minCx, minCz, maxCx, maxCz);
+        if (nearCorner <= activeRenderDistance + sectionSpan) {
+          desiredNearSections.add(sectionKey(sx, sz));
+        }
+      }
+    }
+
+    // Unload whole sections only — never drop individual chunks from a still-desired section.
     Iterator<Map.Entry<ChunkPos, ChunkMesher.MeshData>> it = chunkMeshes.entrySet().iterator();
     while (it.hasNext()) {
       Map.Entry<ChunkPos, ChunkMesher.MeshData> entry = it.next();
       ChunkPos pos = entry.getKey();
-      int dist = Math.max(Math.abs(pos.x() - pcx), Math.abs(pos.z() - pcz));
-      if (dist > renderDistance) {
+      int sx = Math.floorDiv(pos.x(), sectionSpan);
+      int sz = Math.floorDiv(pos.z(), sectionSpan);
+      if (!desiredNearSections.contains(sectionKey(sx, sz))) {
         dirtyRegions.add(regionKey(pos));
         it.remove();
       }
     }
 
-    // Rebuild a few dirty merged region GPU buffers per frame.
     int rebuilds = 0;
-    final int maxRebuilds = 6;
+    final int maxRebuilds = 8;
     Iterator<Long> dirtyIt = dirtyRegions.iterator();
     while (dirtyIt.hasNext() && rebuilds < maxRebuilds) {
       long key = dirtyIt.next();
@@ -453,6 +606,135 @@ public final class WorldRenderer implements AutoCloseable {
       rebuildRegion(key);
       rebuilds++;
     }
+
+    syncLodPatches(pcx, pcz);
+  }
+
+  private static long sectionKey(int sx, int sz) {
+    return (((long) sx) << 32) ^ (sz & 0xffffffffL);
+  }
+
+  private static int sectionNearCorner(
+      int pcx, int pcz, int minCx, int minCz, int maxCx, int maxCz) {
+    return Math.min(
+        Math.min(
+            Math.max(Math.abs(minCx - pcx), Math.abs(minCz - pcz)),
+            Math.max(Math.abs(maxCx - pcx), Math.abs(minCz - pcz))),
+        Math.min(
+            Math.max(Math.abs(minCx - pcx), Math.abs(maxCz - pcz)),
+            Math.max(Math.abs(maxCx - pcx), Math.abs(maxCz - pcz))));
+  }
+
+  private boolean sectionHasNearMesh(int minCx, int minCz, int sectionSpan) {
+    for (int cz = minCz; cz < minCz + sectionSpan; cz++) {
+      for (int cx = minCx; cx < minCx + sectionSpan; cx++) {
+        if (chunkMeshes.containsKey(new ChunkPos(cx, cz))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private void syncLodPatches(int pcx, int pcz) {
+    if (lodMeshScheduler == null) {
+      return;
+    }
+    for (LodMeshScheduler.Completed done : lodMeshScheduler.drain(8)) {
+      // Drop if a near chunk already claimed this section while we were building.
+      int minCx = done.key().sectionX() * LOD_SECTION_CHUNKS;
+      int minCz = done.key().sectionZ() * LOD_SECTION_CHUNKS;
+      if (sectionHasNearMesh(minCx, minCz, LOD_SECTION_CHUNKS)) {
+        continue;
+      }
+      GpuRegionMesh old = lodMeshes.remove(done.key());
+      if (old != null) {
+        pendingMeshFree.add(old);
+      }
+      if (done.data() != null && !done.data().isEmpty()) {
+        lodMeshes.put(
+            done.key(),
+            GpuRegionMesh.upload(vulkan, java.util.List.of(done.data())).setDistantLod(true));
+        if (rtPass != null) {
+          rtPass.markSceneDirty();
+        }
+      }
+    }
+
+    lodDesired.clear();
+    int sectionSpan = LOD_SECTION_CHUNKS;
+    int sizeBlocks = sectionSpan * Chunk.SIZE_X;
+    int psx = Math.floorDiv(pcx, sectionSpan);
+    int psz = Math.floorDiv(pcz, sectionSpan);
+    int sectionRadius = Math.max(1, (activeLodDistance + sectionSpan - 1) / sectionSpan);
+
+    int lodSubmits = 0;
+    final int maxLodSubmits = 12;
+    for (int sx = psx - sectionRadius; sx <= psx + sectionRadius; sx++) {
+      for (int sz = psz - sectionRadius; sz <= psz + sectionRadius; sz++) {
+        int minCx = sx * sectionSpan;
+        int minCz = sz * sectionSpan;
+        int maxCx = minCx + sectionSpan - 1;
+        int maxCz = minCz + sectionSpan - 1;
+        int nearCorner = sectionNearCorner(pcx, pcz, minCx, minCz, maxCx, maxCz);
+        if (nearCorner > activeLodDistance) {
+          continue;
+        }
+        // Near owns this section once any full-detail chunk is present — unload LOD.
+        if (sectionHasNearMesh(minCx, minCz, sectionSpan)) {
+          continue;
+        }
+        // Also skip if the section already intersects the near radius (about to load wholes).
+        if (nearCorner <= activeRenderDistance) {
+          continue;
+        }
+
+        // Sample spacing in blocks (must divide section size). Smaller = sharper distant hills.
+        int step = nearCorner < activeRenderDistance + 24 ? 2 : 4;
+        LodMeshScheduler.LodKey key = new LodMeshScheduler.LodKey(sx, sz, step);
+        lodDesired.add(key);
+        if (lodMeshes.containsKey(key) || lodSubmits >= maxLodSubmits) {
+          continue;
+        }
+        boolean onScreen = lodSectionInFrustum(minCx, minCz, sectionSpan);
+        if (!onScreen && lodSubmits >= Math.max(2, maxLodSubmits / 2)) {
+          continue;
+        }
+        int originX = minCx * Chunk.SIZE_X;
+        int originZ = minCz * Chunk.SIZE_Z;
+        if (lodMeshScheduler.submit(
+            key, world.getTerrainGenerator(), atlas, originX, originZ, sizeBlocks)) {
+          lodSubmits++;
+        }
+      }
+    }
+
+    Iterator<Map.Entry<LodMeshScheduler.LodKey, GpuRegionMesh>> lodIt =
+        lodMeshes.entrySet().iterator();
+    while (lodIt.hasNext()) {
+      Map.Entry<LodMeshScheduler.LodKey, GpuRegionMesh> entry = lodIt.next();
+      LodMeshScheduler.LodKey key = entry.getKey();
+      int minCx = key.sectionX() * sectionSpan;
+      int minCz = key.sectionZ() * sectionSpan;
+      if (!lodDesired.contains(key) || sectionHasNearMesh(minCx, minCz, sectionSpan)) {
+        pendingMeshFree.add(entry.getValue());
+        lodIt.remove();
+      }
+    }
+  }
+
+  private boolean lodSectionInFrustum(int minCx, int minCz, int sectionSpan) {
+    float minX = minCx * Chunk.SIZE_X;
+    float minZ = minCz * Chunk.SIZE_Z;
+    float maxX = (minCx + sectionSpan) * Chunk.SIZE_X;
+    float maxZ = (minCz + sectionSpan) * Chunk.SIZE_Z;
+    return chunkFrustum.testAab(minX, 0f, minZ, maxX, (float) Chunk.SIZE_Y, maxZ);
+  }
+
+  private boolean lodKeyInFrustum(LodMeshScheduler.LodKey key) {
+    int minCx = key.sectionX() * LOD_SECTION_CHUNKS;
+    int minCz = key.sectionZ() * LOD_SECTION_CHUNKS;
+    return lodSectionInFrustum(minCx, minCz, LOD_SECTION_CHUNKS);
   }
 
   private void rebuildRegion(long key) {
@@ -480,6 +762,9 @@ public final class WorldRenderer implements AutoCloseable {
       return;
     }
     regionMeshes.put(key, GpuRegionMesh.upload(vulkan, parts));
+    if (rtPass != null) {
+      rtPass.markSceneDirty();
+    }
   }
 
   private static long regionKey(ChunkPos pos) {
@@ -508,6 +793,14 @@ public final class WorldRenderer implements AutoCloseable {
     if (pendingMeshFree.isEmpty()) {
       return;
     }
+    // Freeing BLASes while TLAS still references them causes DEVICE_LOST — rebuild first.
+    if (rtPass != null && isRayTracingEnabled()) {
+      rtPass.markSceneDirty();
+      java.util.ArrayList<GpuRegionMesh> live = new java.util.ArrayList<>();
+      live.addAll(regionMeshes.values());
+      live.addAll(lodMeshes.values());
+      rtPass.rebuildSceneOnly(live);
+    }
     vulkan.waitIdle();
     for (GpuRegionMesh mesh : pendingMeshFree) {
       mesh.free(vulkan);
@@ -529,8 +822,18 @@ public final class WorldRenderer implements AutoCloseable {
     }
 
     VkDevice device = vulkan.getDevice();
+    boolean rt = isRayTracingEnabled();
+    int frameId = diagRtFrames;
+    boolean verboseRt = rt && (frameId < 45 || frameId % 20 == 0);
     try (MemoryStack stack = stackPush()) {
-      vkWaitForFences(device, inFlightFences[currentFrame], true, -1L);
+      if (verboseRt) {
+        DiagLog.log("rt#" + frameId + " waitFence");
+      }
+      int wait = vkWaitForFences(device, inFlightFences[currentFrame], true, -1L);
+      if (wait != VK_SUCCESS) {
+        DiagLog.logVk("waitFence frame=" + currentFrame + " rt=" + rt, wait);
+        VulkanContext.checkVk(wait, "waitFence");
+      }
 
       IntBuffer imageIndex = stack.ints(0);
       int acquire =
@@ -547,6 +850,7 @@ public final class WorldRenderer implements AutoCloseable {
         return;
       }
       if (acquire != VK_SUCCESS && acquire != VK_SUBOPTIMAL_KHR) {
+        DiagLog.logVk("acquireImage", acquire);
         throw new IllegalStateException("Failed to acquire swapchain image: " + acquire);
       }
       int swapIndex = imageIndex.get(0);
@@ -554,6 +858,33 @@ public final class WorldRenderer implements AutoCloseable {
 
       vkResetFences(device, inFlightFences[currentFrame]);
       updateUniformBuffer(player, currentFrame);
+      updateSkyUniformBuffer(player, currentFrame);
+
+      boolean underwater = player.isEyeInWater();
+      float fogR = underwater ? 0.04f : 0.53f;
+      float fogG = underwater ? 0.18f : 0.81f;
+      float fogB = underwater ? 0.32f : 0.92f;
+      float fogEnd = activeLodDistance * Chunk.SIZE_X * 0.92f;
+      float fogStart = Math.max(activeRenderDistance * Chunk.SIZE_X * 0.45f, fogEnd * 0.35f);
+      float[] span = atlas != null ? atlas.tileUvSpan() : new float[] {1f, 1f};
+
+      // Build/rebuild AS before recording — never submit AS cmds while a primary CB is open.
+      boolean useRt = false;
+      if (isRayTracingEnabled()) {
+        if (verboseRt) {
+          DiagLog.log("rt#" + frameId + " prepareFrame");
+        }
+        rtPass.ensureOutputSize(targetWidth, targetHeight);
+        java.util.ArrayList<GpuRegionMesh> allMeshes = new java.util.ArrayList<>();
+        allMeshes.addAll(regionMeshes.values());
+        allMeshes.addAll(lodMeshes.values());
+        rtPass.prepareFrame(
+            allMeshes, player, fogStart, fogEnd, fogR, fogG, fogB, underwater, span[0], span[1]);
+        useRt = rtPass.hasGeometry();
+        if (verboseRt) {
+          DiagLog.log("rt#" + frameId + " prepare done hasGeom=" + useRt);
+        }
+      }
 
       VkCommandBuffer cmd = commandBuffers[currentFrame];
       vkResetCommandBuffer(cmd, 0);
@@ -563,72 +894,116 @@ public final class WorldRenderer implements AutoCloseable {
               .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
       VulkanContext.checkVk(vkBeginCommandBuffer(cmd, beginInfo), "begin world cmd");
 
-      VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
-      viewport.get(0).x(0).y(0).width(targetWidth).height(targetHeight).minDepth(0f).maxDepth(1f);
-      viewport.position(0);
-      vkCmdSetViewport(cmd, 0, viewport);
-
-      VkRect2D.Buffer scissor = VkRect2D.calloc(1, stack);
-      scissor.get(0).offset().set(0, 0);
-      scissor.get(0).extent().set(targetWidth, targetHeight);
-      scissor.position(0);
-      vkCmdSetScissor(cmd, 0, scissor);
-
-      boolean underwater = player.isEyeInWater();
-      float fogR = underwater ? 0.04f : 0.53f;
-      float fogG = underwater ? 0.18f : 0.81f;
-      float fogB = underwater ? 0.32f : 0.92f;
-      VkClearValue.Buffer clearValues = VkClearValue.calloc(2, stack);
-      clearValues.get(0).color().float32(0, fogR).float32(1, fogG).float32(2, fogB).float32(3, 1f);
-      clearValues.get(1).depthStencil().depth(1f).stencil(0);
-      clearValues.position(0);
-
-      VkRenderPassBeginInfo renderPassInfo =
-          VkRenderPassBeginInfo.calloc(stack)
-              .sType(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO)
-              .renderPass(renderPass)
-              .framebuffer(framebuffer)
-              .clearValueCount(2)
-              .pClearValues(clearValues);
-      renderPassInfo.renderArea().offset().set(0, 0);
-      renderPassInfo.renderArea().extent().set(targetWidth, targetHeight);
-
-      vkCmdBeginRenderPass(cmd, renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-      vkCmdBindDescriptorSets(
-          cmd,
-          VK_PIPELINE_BIND_POINT_GRAPHICS,
-          pipelineLayout,
-          0,
-          stack.longs(descriptorSets[currentFrame]),
-          null);
-
       int drawn = 0;
-      float aspect = targetWidth / (float) Math.max(1, targetHeight);
-      ChunkFrustum.buildProjView(player, aspect, projViewScratch);
-      chunkFrustum.update(projViewScratch);
+      long presentSourceImage = colorImage;
 
-      // Pass 1: opaque terrain — one draw per merged 4×4 chunk region.
-      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-      for (Map.Entry<Long, GpuRegionMesh> entry : regionMeshes.entrySet()) {
-        GpuRegionMesh mesh = entry.getValue();
-        if (mesh.isEmpty() || !regionInFrustum(entry.getKey())) {
-          continue;
+      if (useRt) {
+        if (verboseRt) {
+          DiagLog.log("rt#" + frameId + " recordTrace");
         }
-        mesh.drawOpaque(cmd);
-        drawn++;
+        rtPass.recordTrace(cmd);
+        if (verboseRt) {
+          DiagLog.log("rt#" + frameId + " recordTrace done");
+        }
+        presentSourceImage = rtPass.getOutputImage();
+        drawn = regionMeshes.size() + lodMeshes.size();
       }
+      if (presentSourceImage == colorImage) {
+        VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
+        viewport.get(0).x(0).y(0).width(targetWidth).height(targetHeight).minDepth(0f).maxDepth(1f);
+        viewport.position(0);
+        vkCmdSetViewport(cmd, 0, viewport);
 
-      // Pass 2: water blended over solid depth (no depth write).
-      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, translucentPipeline);
-      for (Map.Entry<Long, GpuRegionMesh> entry : regionMeshes.entrySet()) {
-        GpuRegionMesh mesh = entry.getValue();
-        if (!mesh.hasTranslucent() || !regionInFrustum(entry.getKey())) {
-          continue;
+        VkRect2D.Buffer scissor = VkRect2D.calloc(1, stack);
+        scissor.get(0).offset().set(0, 0);
+        scissor.get(0).extent().set(targetWidth, targetHeight);
+        scissor.position(0);
+        vkCmdSetScissor(cmd, 0, scissor);
+
+        VkClearValue.Buffer clearValues = VkClearValue.calloc(2, stack);
+        clearValues
+            .get(0)
+            .color()
+            .float32(0, fogR)
+            .float32(1, fogG)
+            .float32(2, fogB)
+            .float32(3, 1f);
+        clearValues.get(1).depthStencil().depth(1f).stencil(0);
+        clearValues.position(0);
+
+        VkRenderPassBeginInfo renderPassInfo =
+            VkRenderPassBeginInfo.calloc(stack)
+                .sType(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO)
+                .renderPass(renderPass)
+                .framebuffer(framebuffer)
+                .clearValueCount(2)
+                .pClearValues(clearValues);
+        renderPassInfo.renderArea().offset().set(0, 0);
+        renderPassInfo.renderArea().extent().set(targetWidth, targetHeight);
+
+        vkCmdBeginRenderPass(cmd, renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        // Procedural sky + voxel sun disc (fullscreen triangle, no depth write).
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipeline);
+        vkCmdBindDescriptorSets(
+            cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            skyPipelineLayout,
+            0,
+            stack.longs(skyDescriptorSets[currentFrame]),
+            null);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        vkCmdBindDescriptorSets(
+            cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pipelineLayout,
+            0,
+            stack.longs(descriptorSets[currentFrame]),
+            null);
+
+        float aspect = targetWidth / (float) Math.max(1, targetHeight);
+        float farPlane = Math.max(512f, activeLodDistance * Chunk.SIZE_X * 1.6f);
+        ChunkFrustum.buildProjView(player, aspect, farPlane, projViewScratch);
+        chunkFrustum.update(projViewScratch);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        for (Map.Entry<LodMeshScheduler.LodKey, GpuRegionMesh> entry : lodMeshes.entrySet()) {
+          GpuRegionMesh mesh = entry.getValue();
+          if (mesh.isEmpty() || !lodKeyInFrustum(entry.getKey())) {
+            continue;
+          }
+          mesh.drawOpaque(cmd);
+          drawn++;
         }
-        mesh.drawTranslucent(cmd);
+
+        for (Map.Entry<Long, GpuRegionMesh> entry : regionMeshes.entrySet()) {
+          GpuRegionMesh mesh = entry.getValue();
+          if (mesh.isEmpty() || !regionInFrustum(entry.getKey())) {
+            continue;
+          }
+          mesh.drawOpaque(cmd);
+          drawn++;
+        }
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, translucentPipeline);
+        for (Map.Entry<LodMeshScheduler.LodKey, GpuRegionMesh> entry : lodMeshes.entrySet()) {
+          GpuRegionMesh mesh = entry.getValue();
+          if (!mesh.hasTranslucent() || !lodKeyInFrustum(entry.getKey())) {
+            continue;
+          }
+          mesh.drawTranslucent(cmd);
+        }
+        for (Map.Entry<Long, GpuRegionMesh> entry : regionMeshes.entrySet()) {
+          GpuRegionMesh mesh = entry.getValue();
+          if (!mesh.hasTranslucent() || !regionInFrustum(entry.getKey())) {
+            continue;
+          }
+          mesh.drawTranslucent(cmd);
+        }
+        vkCmdEndRenderPass(cmd);
       }
-      vkCmdEndRenderPass(cmd);
 
       // Stamp Ultralight FPS HUD into the top-left of the offscreen color target.
       if (hudPixels != null && hudWidth > 0 && hudHeight > 0) {
@@ -648,7 +1023,7 @@ public final class WorldRenderer implements AutoCloseable {
             .dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
             .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
             .newLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-            .image(colorImage)
+            .image(presentSourceImage)
             .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
             .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
         toDst
@@ -687,7 +1062,11 @@ public final class WorldRenderer implements AutoCloseable {
         region.get(0).imageExtent().set(Math.max(1, copyW), Math.max(1, copyH), 1);
         region.position(0);
         org.lwjgl.vulkan.VK10.vkCmdCopyBufferToImage(
-            cmd, hudStagingBuffer, colorImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
+            cmd,
+            hudStagingBuffer,
+            presentSourceImage,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            region);
 
         VkImageMemoryBarrier.Buffer toSrc = VkImageMemoryBarrier.calloc(1, stack);
         toSrc
@@ -696,7 +1075,7 @@ public final class WorldRenderer implements AutoCloseable {
             .dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT)
             .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
             .newLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
-            .image(colorImage)
+            .image(presentSourceImage)
             .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
             .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
         toSrc
@@ -725,7 +1104,7 @@ public final class WorldRenderer implements AutoCloseable {
           .dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT)
           .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
           .newLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
-          .image(colorImage)
+          .image(presentSourceImage)
           .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
           .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
       barrier
@@ -777,7 +1156,7 @@ public final class WorldRenderer implements AutoCloseable {
       blit.position(0);
       vkCmdBlitImage(
           cmd,
-          colorImage,
+          presentSourceImage,
           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
           swapImage,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -814,6 +1193,9 @@ public final class WorldRenderer implements AutoCloseable {
 
       VulkanContext.checkVk(vkEndCommandBuffer(cmd), "end world cmd");
 
+      if (useRt && verboseRt) {
+        DiagLog.log("rt#" + frameId + " submit");
+      }
       VkSubmitInfo submitInfo =
           VkSubmitInfo.calloc(stack)
               .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
@@ -822,9 +1204,16 @@ public final class WorldRenderer implements AutoCloseable {
               .pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_TRANSFER_BIT))
               .pCommandBuffers(stack.pointers(cmd.address()))
               .pSignalSemaphores(stack.longs(renderFinishedSemaphores[currentFrame]));
-      VulkanContext.checkVk(
-          vkQueueSubmit(vulkan.getGraphicsQueue(), submitInfo, inFlightFences[currentFrame]),
-          "submit world render");
+      int submit =
+          vkQueueSubmit(vulkan.getGraphicsQueue(), submitInfo, inFlightFences[currentFrame]);
+      if (submit != VK_SUCCESS) {
+        DiagLog.logVk("submit world render rt=" + useRt, submit);
+      }
+      VulkanContext.checkVk(submit, "submit world render");
+      // Always breadcrumb submit — crash often happens before next waitFence.
+      if (useRt) {
+        DiagLog.logQuiet("rt#" + frameId + " submit ok");
+      }
 
       org.lwjgl.vulkan.VkPresentInfoKHR presentInfo =
           org.lwjgl.vulkan.VkPresentInfoKHR.calloc(stack)
@@ -834,13 +1223,22 @@ public final class WorldRenderer implements AutoCloseable {
               .pSwapchains(stack.longs(swapchain.getSwapchain()))
               .pImageIndices(stack.ints(swapIndex));
       int present = vkQueuePresentKHR(vulkan.getPresentQueue(), presentInfo);
+      if (present == VK_ERROR_DEVICE_LOST) {
+        DiagLog.logVk("present", present);
+        throw new IllegalStateException("DEVICE_LOST on present");
+      }
       if (present == VK_ERROR_OUT_OF_DATE_KHR
           || present == VK_SUBOPTIMAL_KHR
           || window.wasFramebufferResized()) {
         window.clearFramebufferResized();
         recreateSwapchainResources();
       } else if (present != VK_SUCCESS) {
+        DiagLog.logVk("present", present);
         throw new IllegalStateException("Failed to present: " + present);
+      }
+      if (useRt) {
+        DiagLog.logQuiet("rt#" + frameId + " present ok");
+        diagRtFrames++;
       }
 
       currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -858,6 +1256,9 @@ public final class WorldRenderer implements AutoCloseable {
                 + "x"
                 + targetHeight);
       }
+    } catch (RuntimeException e) {
+      DiagLog.log("render EXCEPTION rt=" + isRayTracingEnabled() + " " + e);
+      throw e;
     }
   }
 
@@ -889,18 +1290,28 @@ public final class WorldRenderer implements AutoCloseable {
       meshScheduler.close();
       meshScheduler = null;
     }
+    if (lodMeshScheduler != null) {
+      lodMeshScheduler.close();
+      lodMeshScheduler = null;
+    }
     destroyHudStaging();
+    if (rtPass != null) {
+      rtPass.close();
+      rtPass = null;
+    }
     destroySyncObjects();
     if (commandPool != VK_NULL_HANDLE) {
       vkDestroyCommandPool(vulkan.getDevice(), commandPool, null);
       commandPool = VK_NULL_HANDLE;
     }
     destroyUniformBuffers();
+    destroySkyUniformBuffers();
     if (descriptorPool != VK_NULL_HANDLE) {
       vkDestroyDescriptorPool(vulkan.getDevice(), descriptorPool, null);
       descriptorPool = VK_NULL_HANDLE;
     }
     destroyTextureResources();
+    destroySunTextureResources();
     destroyOffscreenTargets();
     if (translucentPipeline != VK_NULL_HANDLE) {
       vkDestroyPipeline(vulkan.getDevice(), translucentPipeline, null);
@@ -910,9 +1321,17 @@ public final class WorldRenderer implements AutoCloseable {
       vkDestroyPipeline(vulkan.getDevice(), graphicsPipeline, null);
       graphicsPipeline = VK_NULL_HANDLE;
     }
+    if (skyPipeline != VK_NULL_HANDLE) {
+      vkDestroyPipeline(vulkan.getDevice(), skyPipeline, null);
+      skyPipeline = VK_NULL_HANDLE;
+    }
     if (pipelineLayout != VK_NULL_HANDLE) {
       vkDestroyPipelineLayout(vulkan.getDevice(), pipelineLayout, null);
       pipelineLayout = VK_NULL_HANDLE;
+    }
+    if (skyPipelineLayout != VK_NULL_HANDLE) {
+      vkDestroyPipelineLayout(vulkan.getDevice(), skyPipelineLayout, null);
+      skyPipelineLayout = VK_NULL_HANDLE;
     }
     if (renderPass != VK_NULL_HANDLE) {
       vkDestroyRenderPass(vulkan.getDevice(), renderPass, null);
@@ -921,6 +1340,10 @@ public final class WorldRenderer implements AutoCloseable {
     if (descriptorSetLayout != VK_NULL_HANDLE) {
       vkDestroyDescriptorSetLayout(vulkan.getDevice(), descriptorSetLayout, null);
       descriptorSetLayout = VK_NULL_HANDLE;
+    }
+    if (skyDescriptorSetLayout != VK_NULL_HANDLE) {
+      vkDestroyDescriptorSetLayout(vulkan.getDevice(), skyDescriptorSetLayout, null);
+      skyDescriptorSetLayout = VK_NULL_HANDLE;
     }
   }
 
@@ -945,6 +1368,11 @@ public final class WorldRenderer implements AutoCloseable {
     regionMeshes.clear();
     chunkMeshes.clear();
     dirtyRegions.clear();
+    for (GpuRegionMesh mesh : lodMeshes.values()) {
+      mesh.free(vulkan);
+    }
+    lodMeshes.clear();
+    lodDesired.clear();
   }
 
   private void ensureHudStaging(int bytes) {
@@ -994,9 +1422,9 @@ public final class WorldRenderer implements AutoCloseable {
     double[] eye = player.getEyePosition();
     boolean underwater = player.isEyeInWater();
     float[] span = atlas != null ? atlas.tileUvSpan() : new float[] {1f, 1f};
-    // Fog ends just inside the loaded chunk radius so the horizon hides the world edge.
-    float fogEnd = activeRenderDistance * Chunk.SIZE_X * 0.92f;
-    float fogStart = fogEnd * 0.55f;
+    // Fog ends near the LOD horizon so distant patches fade into the sky.
+    float fogEnd = activeLodDistance * Chunk.SIZE_X * 0.92f;
+    float fogStart = Math.max(activeRenderDistance * Chunk.SIZE_X * 0.45f, fogEnd * 0.35f);
     float fogR = underwater ? 0.04f : 0.53f;
     float fogG = underwater ? 0.18f : 0.81f;
     float fogB = underwater ? 0.32f : 0.92f;
@@ -1015,6 +1443,43 @@ public final class WorldRenderer implements AutoCloseable {
     buffer.put(27, 1f);
   }
 
+  private void updateSkyUniformBuffer(Player player, int frame) {
+    float aspect = targetWidth / (float) Math.max(1, targetHeight);
+    Matrix4f proj =
+        new Matrix4f()
+            .perspective(
+                (float) Math.toRadians(70.0),
+                aspect,
+                0.05f,
+                Math.max(512f, activeLodDistance * Chunk.SIZE_X * 1.6f))
+            .scale(1f, -1f, 1f);
+    double[] eyeArr = player.getEyePosition();
+    Vector3f eye = new Vector3f((float) eyeArr[0], (float) eyeArr[1], (float) eyeArr[2]);
+    double yawRad = Math.toRadians(player.getYaw());
+    double pitchRad = Math.toRadians(player.getPitch());
+    Vector3f center =
+        new Vector3f(
+            eye.x - (float) (Math.sin(yawRad) * Math.cos(pitchRad)),
+            eye.y - (float) Math.sin(pitchRad),
+            eye.z + (float) (Math.cos(yawRad) * Math.cos(pitchRad)));
+    Matrix4f view = new Matrix4f().lookAt(eye, center, new Vector3f(0, 1, 0));
+    Matrix4f viewInv = new Matrix4f(view).invert();
+    Matrix4f projInv = new Matrix4f(proj).invert();
+
+    FloatBuffer buffer = skyUniformBuffersMapped[frame].asFloatBuffer();
+    viewInv.get(0, buffer);
+    projInv.get(16, buffer);
+    float sunLen = (float) Math.sqrt(SUN_X * SUN_X + SUN_Y * SUN_Y + SUN_Z * SUN_Z);
+    buffer.put(32, SUN_X / sunLen);
+    buffer.put(33, SUN_Y / sunLen);
+    buffer.put(34, SUN_Z / sunLen);
+    buffer.put(35, SUN_ANGULAR_RADIUS);
+    buffer.put(36, 0f);
+    buffer.put(37, 0f);
+    buffer.put(38, 0f);
+    buffer.put(39, player.isEyeInWater() ? 1f : 0f);
+  }
+
   private Matrix4f buildMvp(Player player) {
     float aspect = targetWidth / (float) Math.max(1, targetHeight);
     Matrix4f proj =
@@ -1023,7 +1488,7 @@ public final class WorldRenderer implements AutoCloseable {
                 (float) Math.toRadians(70.0),
                 aspect,
                 0.05f,
-                Math.max(256f, activeRenderDistance * Chunk.SIZE_X * 1.5f))
+                Math.max(512f, activeLodDistance * Chunk.SIZE_X * 1.6f))
             .scale(1f, -1f, 1f);
     double[] eyeArr = player.getEyePosition();
     Vector3f eye = new Vector3f((float) eyeArr[0], (float) eyeArr[1], (float) eyeArr[2]);
@@ -1317,6 +1782,133 @@ public final class WorldRenderer implements AutoCloseable {
     }
   }
 
+  private void createSkyDescriptorSetLayout() {
+    try (MemoryStack stack = stackPush()) {
+      org.lwjgl.vulkan.VkDescriptorSetLayoutBinding.Buffer bindings =
+          org.lwjgl.vulkan.VkDescriptorSetLayoutBinding.calloc(2, stack);
+      bindings
+          .get(0)
+          .binding(0)
+          .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+          .descriptorCount(1)
+          .stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+      bindings
+          .get(1)
+          .binding(1)
+          .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+          .descriptorCount(1)
+          .stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+      bindings.position(0);
+      org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo layoutInfo =
+          org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo.calloc(stack).pBindings(bindings);
+      LongBuffer layout = stack.mallocLong(1);
+      VulkanContext.checkVk(
+          vkCreateDescriptorSetLayout(vulkan.getDevice(), layoutInfo, null, layout),
+          "sky descriptor set layout");
+      skyDescriptorSetLayout = layout.get(0);
+    }
+  }
+
+  private void createSkyPipeline() {
+    VkDevice device = vulkan.getDevice();
+    long vertModule = createShaderModule("shaders/sky.vert", shaderc_vertex_shader);
+    long fragModule = createShaderModule("shaders/sky.frag", shaderc_fragment_shader);
+    try (MemoryStack stack = stackPush()) {
+      org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo.Buffer shaderStages =
+          org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo.calloc(2, stack);
+      shaderStages
+          .get(0)
+          .stage(VK_SHADER_STAGE_VERTEX_BIT)
+          .module(vertModule)
+          .pName(stack.UTF8("main"));
+      shaderStages
+          .get(1)
+          .stage(VK_SHADER_STAGE_FRAGMENT_BIT)
+          .module(fragModule)
+          .pName(stack.UTF8("main"));
+      shaderStages.position(0);
+
+      org.lwjgl.vulkan.VkPipelineVertexInputStateCreateInfo vertexInput =
+          org.lwjgl.vulkan.VkPipelineVertexInputStateCreateInfo.calloc(stack);
+
+      org.lwjgl.vulkan.VkPipelineInputAssemblyStateCreateInfo inputAssembly =
+          org.lwjgl.vulkan.VkPipelineInputAssemblyStateCreateInfo.calloc(stack)
+              .topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+
+      org.lwjgl.vulkan.VkPipelineViewportStateCreateInfo viewportState =
+          org.lwjgl.vulkan.VkPipelineViewportStateCreateInfo.calloc(stack)
+              .viewportCount(1)
+              .scissorCount(1);
+
+      org.lwjgl.vulkan.VkPipelineRasterizationStateCreateInfo rasterizer =
+          org.lwjgl.vulkan.VkPipelineRasterizationStateCreateInfo.calloc(stack)
+              .polygonMode(VK_POLYGON_MODE_FILL)
+              .cullMode(VK_CULL_MODE_NONE)
+              .frontFace(VK_FRONT_FACE_CLOCKWISE)
+              .lineWidth(1f);
+
+      org.lwjgl.vulkan.VkPipelineMultisampleStateCreateInfo multisampling =
+          org.lwjgl.vulkan.VkPipelineMultisampleStateCreateInfo.calloc(stack)
+              .rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
+
+      org.lwjgl.vulkan.VkPipelineDepthStencilStateCreateInfo depthStencil =
+          org.lwjgl.vulkan.VkPipelineDepthStencilStateCreateInfo.calloc(stack)
+              .depthTestEnable(false)
+              .depthWriteEnable(false)
+              .depthCompareOp(VK_COMPARE_OP_LESS);
+
+      org.lwjgl.vulkan.VkPipelineColorBlendAttachmentState.Buffer blendAtt =
+          org.lwjgl.vulkan.VkPipelineColorBlendAttachmentState.calloc(1, stack);
+      blendAtt
+          .get(0)
+          .blendEnable(false)
+          .colorWriteMask(
+              VK_COLOR_COMPONENT_R_BIT
+                  | VK_COLOR_COMPONENT_G_BIT
+                  | VK_COLOR_COMPONENT_B_BIT
+                  | VK_COLOR_COMPONENT_A_BIT);
+      blendAtt.position(0);
+      org.lwjgl.vulkan.VkPipelineColorBlendStateCreateInfo blend =
+          org.lwjgl.vulkan.VkPipelineColorBlendStateCreateInfo.calloc(stack).pAttachments(blendAtt);
+
+      org.lwjgl.vulkan.VkPipelineDynamicStateCreateInfo dynamicState =
+          org.lwjgl.vulkan.VkPipelineDynamicStateCreateInfo.calloc(stack)
+              .pDynamicStates(stack.ints(VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR));
+
+      org.lwjgl.vulkan.VkPipelineLayoutCreateInfo pipelineLayoutInfo =
+          org.lwjgl.vulkan.VkPipelineLayoutCreateInfo.calloc(stack)
+              .pSetLayouts(stack.longs(skyDescriptorSetLayout));
+      LongBuffer layout = stack.mallocLong(1);
+      VulkanContext.checkVk(
+          vkCreatePipelineLayout(device, pipelineLayoutInfo, null, layout), "sky pipeline layout");
+      skyPipelineLayout = layout.get(0);
+
+      VkGraphicsPipelineCreateInfo.Buffer pipeInfo = VkGraphicsPipelineCreateInfo.calloc(1, stack);
+      pipeInfo
+          .get(0)
+          .pStages(shaderStages)
+          .pVertexInputState(vertexInput)
+          .pInputAssemblyState(inputAssembly)
+          .pViewportState(viewportState)
+          .pRasterizationState(rasterizer)
+          .pMultisampleState(multisampling)
+          .pDepthStencilState(depthStencil)
+          .pColorBlendState(blend)
+          .pDynamicState(dynamicState)
+          .layout(skyPipelineLayout)
+          .renderPass(renderPass)
+          .subpass(0);
+      pipeInfo.position(0);
+      LongBuffer pipe = stack.mallocLong(1);
+      VulkanContext.checkVk(
+          vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, pipeInfo, null, pipe), "sky pipeline");
+      skyPipeline = pipe.get(0);
+    } finally {
+      vkDestroyShaderModule(device, vertModule, null);
+      vkDestroyShaderModule(device, fragModule, null);
+    }
+  }
+
   private long createShaderModule(String path, int kind) {
     ByteBuffer spirv = ShaderCompiler.compileGlsl(path, kind);
     try (MemoryStack stack = stackPush()) {
@@ -1604,6 +2196,185 @@ public final class WorldRenderer implements AutoCloseable {
     }
   }
 
+  private void createSunTextureResources() {
+    final int width = 32;
+    final int height = 32;
+    ByteBuffer pixels = org.lwjgl.system.MemoryUtil.memAlloc(width * height * 4);
+    try {
+      float cx = (width - 1) * 0.5f;
+      float cy = (height - 1) * 0.5f;
+      float r = 11f;
+      for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+          float d = (float) Math.hypot(x - cx, y - cy);
+          int i = (y * width + x) * 4;
+          int rr;
+          int gg;
+          int bb;
+          int aa;
+          if (d <= r * 0.55f) {
+            rr = 255;
+            gg = 236;
+            bb = 140;
+            aa = 255;
+          } else if (d <= r * 0.85f) {
+            rr = 255;
+            gg = 200;
+            bb = 64;
+            aa = 255;
+          } else if (d <= r) {
+            rr = 255;
+            gg = 150;
+            bb = 32;
+            aa = 230;
+          } else if (d <= r + 2.5f) {
+            float t = Math.max(0f, 1f - (d - r) / 2.5f);
+            rr = 255;
+            gg = 180;
+            bb = 80;
+            aa = (int) (160 * t);
+          } else {
+            rr = 0;
+            gg = 0;
+            bb = 0;
+            aa = 0;
+          }
+          pixels.put(i, (byte) rr);
+          pixels.put(i + 1, (byte) gg);
+          pixels.put(i + 2, (byte) bb);
+          pixels.put(i + 3, (byte) aa);
+        }
+      }
+      overlaySunPngIfPresent(pixels, width, height);
+
+      VkDevice device = vulkan.getDevice();
+      long stagingBuffer = VK_NULL_HANDLE;
+      long stagingMemory = VK_NULL_HANDLE;
+      try (MemoryStack stack = stackPush()) {
+        long imageSize = (long) width * height * 4;
+        stagingBuffer = createBuffer(device, stack, imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        stagingMemory =
+            allocateBufferMemory(
+                vulkan,
+                device,
+                stack,
+                stagingBuffer,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        PointerBuffer mapped = stack.mallocPointer(1);
+        vkMapMemory(device, stagingMemory, 0, imageSize, 0, mapped);
+        ByteBuffer dst = mapped.getByteBuffer(0, (int) imageSize);
+        pixels.rewind();
+        dst.put(pixels);
+        vkUnmapMemory(device, stagingMemory);
+
+        VkImageCreateInfo imageInfo =
+            VkImageCreateInfo.calloc(stack)
+                .imageType(VK_IMAGE_TYPE_2D)
+                .format(VK_FORMAT_R8G8B8A8_UNORM)
+                .arrayLayers(1)
+                .samples(VK_SAMPLE_COUNT_1_BIT)
+                .tiling(VK_IMAGE_TILING_OPTIMAL)
+                .usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
+                .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+        imageInfo.extent().set(width, height, 1);
+        imageInfo.mipLevels(1);
+        LongBuffer image = stack.mallocLong(1);
+        VulkanContext.checkVk(vkCreateImage(device, imageInfo, null, image), "sun image");
+        sunImage = image.get(0);
+
+        VkMemoryRequirements memRequirements = VkMemoryRequirements.malloc(stack);
+        vkGetImageMemoryRequirements(device, sunImage, memRequirements);
+        VkMemoryAllocateInfo allocInfo =
+            VkMemoryAllocateInfo.calloc(stack)
+                .allocationSize(memRequirements.size())
+                .memoryTypeIndex(
+                    vulkan.findMemoryType(
+                        memRequirements.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+        LongBuffer memory = stack.mallocLong(1);
+        VulkanContext.checkVk(vkAllocateMemory(device, allocInfo, null, memory), "sun memory");
+        sunImageMemory = memory.get(0);
+        org.lwjgl.vulkan.VK10.vkBindImageMemory(device, sunImage, sunImageMemory, 0);
+
+        transitionImageLayout(
+            sunImage,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT);
+        copyBufferToImage(stagingBuffer, sunImage, width, height);
+        transitionImageLayout(
+            sunImage,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT);
+
+        VkImageViewCreateInfo viewInfo =
+            VkImageViewCreateInfo.calloc(stack)
+                .image(sunImage)
+                .viewType(VK_IMAGE_VIEW_TYPE_2D)
+                .format(VK_FORMAT_R8G8B8A8_UNORM);
+        viewInfo
+            .subresourceRange()
+            .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+            .baseMipLevel(0)
+            .levelCount(1)
+            .baseArrayLayer(0)
+            .layerCount(1);
+        LongBuffer view = stack.mallocLong(1);
+        VulkanContext.checkVk(vkCreateImageView(device, viewInfo, null, view), "sun view");
+        sunImageView = view.get(0);
+
+        org.lwjgl.vulkan.VkSamplerCreateInfo samplerInfo =
+            org.lwjgl.vulkan.VkSamplerCreateInfo.calloc(stack)
+                .magFilter(VK_FILTER_NEAREST)
+                .minFilter(VK_FILTER_NEAREST)
+                .addressModeU(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                .addressModeV(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                .addressModeW(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                .mipmapMode(VK_SAMPLER_MIPMAP_MODE_NEAREST)
+                .maxAnisotropy(1f)
+                .borderColor(VK_BORDER_COLOR_INT_OPAQUE_BLACK);
+        LongBuffer sampler = stack.mallocLong(1);
+        VulkanContext.checkVk(vkCreateSampler(device, samplerInfo, null, sampler), "sun sampler");
+        sunSampler = sampler.get(0);
+      } finally {
+        if (stagingBuffer != VK_NULL_HANDLE) {
+          vkDestroyBuffer(device, stagingBuffer, null);
+        }
+        if (stagingMemory != VK_NULL_HANDLE) {
+          vkFreeMemory(device, stagingMemory, null);
+        }
+      }
+    } finally {
+      memFree(pixels);
+    }
+  }
+
+  /** Optionally replaces procedural sun pixels with {@code textures/sky/sun.png} via ImageIO. */
+  private static void overlaySunPngIfPresent(ByteBuffer pixels, int width, int height) {
+    try (InputStream in =
+        WorldRenderer.class.getClassLoader().getResourceAsStream("textures/sky/sun.png")) {
+      if (in == null) {
+        return;
+      }
+      java.awt.image.BufferedImage img = javax.imageio.ImageIO.read(in);
+      if (img == null || img.getWidth() != width || img.getHeight() != height) {
+        return;
+      }
+      for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+          int argb = img.getRGB(x, y);
+          int i = (y * width + x) * 4;
+          pixels.put(i, (byte) ((argb >> 16) & 0xff));
+          pixels.put(i + 1, (byte) ((argb >> 8) & 0xff));
+          pixels.put(i + 2, (byte) (argb & 0xff));
+          pixels.put(i + 3, (byte) ((argb >> 24) & 0xff));
+        }
+      }
+    } catch (Exception ignored) {
+      // Keep procedural disc.
+    }
+  }
+
   private void createUniformBuffers() {
     uniformBuffers = new long[MAX_FRAMES_IN_FLIGHT];
     uniformBuffersMemory = new long[MAX_FRAMES_IN_FLIGHT];
@@ -1629,21 +2400,22 @@ public final class WorldRenderer implements AutoCloseable {
 
   private void createDescriptorPool() {
     try (MemoryStack stack = stackPush()) {
+      // World sets + sky sets (each needs 1 UBO + 1 sampler).
       org.lwjgl.vulkan.VkDescriptorPoolSize.Buffer poolSizes =
           org.lwjgl.vulkan.VkDescriptorPoolSize.calloc(2, stack);
       poolSizes
           .get(0)
           .type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
-          .descriptorCount(MAX_FRAMES_IN_FLIGHT);
+          .descriptorCount(MAX_FRAMES_IN_FLIGHT * 2);
       poolSizes
           .get(1)
           .type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-          .descriptorCount(MAX_FRAMES_IN_FLIGHT);
+          .descriptorCount(MAX_FRAMES_IN_FLIGHT * 2);
       poolSizes.position(0);
       org.lwjgl.vulkan.VkDescriptorPoolCreateInfo poolInfo =
           org.lwjgl.vulkan.VkDescriptorPoolCreateInfo.calloc(stack)
               .flags(VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT)
-              .maxSets(MAX_FRAMES_IN_FLIGHT)
+              .maxSets(MAX_FRAMES_IN_FLIGHT * 2)
               .pPoolSizes(poolSizes);
       LongBuffer pool = stack.mallocLong(1);
       VulkanContext.checkVk(
@@ -1692,6 +2464,81 @@ public final class WorldRenderer implements AutoCloseable {
         writes
             .get(1)
             .dstSet(descriptorSets[i])
+            .dstBinding(1)
+            .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+            .descriptorCount(1)
+            .pImageInfo(imageInfo);
+        writes.position(0);
+        vkUpdateDescriptorSets(device, writes, null);
+      }
+    }
+  }
+
+  private void createSkyUniformBuffers() {
+    skyUniformBuffers = new long[MAX_FRAMES_IN_FLIGHT];
+    skyUniformBuffersMemory = new long[MAX_FRAMES_IN_FLIGHT];
+    skyUniformBuffersMapped = new ByteBuffer[MAX_FRAMES_IN_FLIGHT];
+    VkDevice device = vulkan.getDevice();
+    try (MemoryStack stack = stackPush()) {
+      for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        skyUniformBuffers[i] =
+            createBuffer(
+                device, stack, SKY_UNIFORM_BUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+        skyUniformBuffersMemory[i] =
+            allocateBufferMemory(
+                vulkan,
+                device,
+                stack,
+                skyUniformBuffers[i],
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        PointerBuffer mapped = stack.mallocPointer(1);
+        vkMapMemory(device, skyUniformBuffersMemory[i], 0, SKY_UNIFORM_BUFFER_SIZE, 0, mapped);
+        skyUniformBuffersMapped[i] = mapped.getByteBuffer(0, SKY_UNIFORM_BUFFER_SIZE);
+      }
+    }
+  }
+
+  private void createSkyDescriptorSets() {
+    skyDescriptorSets = new long[MAX_FRAMES_IN_FLIGHT];
+    VkDevice device = vulkan.getDevice();
+    try (MemoryStack stack = stackPush()) {
+      LongBuffer layouts = stack.mallocLong(MAX_FRAMES_IN_FLIGHT);
+      for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        layouts.put(i, skyDescriptorSetLayout);
+      }
+      layouts.rewind();
+      org.lwjgl.vulkan.VkDescriptorSetAllocateInfo allocInfo =
+          org.lwjgl.vulkan.VkDescriptorSetAllocateInfo.calloc(stack)
+              .descriptorPool(descriptorPool)
+              .pSetLayouts(layouts);
+      LongBuffer sets = stack.mallocLong(MAX_FRAMES_IN_FLIGHT);
+      VulkanContext.checkVk(
+          vkAllocateDescriptorSets(device, allocInfo, sets), "sky descriptor sets");
+      for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        skyDescriptorSets[i] = sets.get(i);
+        org.lwjgl.vulkan.VkDescriptorBufferInfo.Buffer bufferInfo =
+            org.lwjgl.vulkan.VkDescriptorBufferInfo.calloc(1, stack);
+        bufferInfo.get(0).buffer(skyUniformBuffers[i]).offset(0).range(SKY_UNIFORM_BUFFER_SIZE);
+        bufferInfo.position(0);
+        org.lwjgl.vulkan.VkDescriptorImageInfo.Buffer imageInfo =
+            org.lwjgl.vulkan.VkDescriptorImageInfo.calloc(1, stack);
+        imageInfo
+            .get(0)
+            .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            .imageView(sunImageView)
+            .sampler(sunSampler);
+        imageInfo.position(0);
+        VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(2, stack);
+        writes
+            .get(0)
+            .dstSet(skyDescriptorSets[i])
+            .dstBinding(0)
+            .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+            .descriptorCount(1)
+            .pBufferInfo(bufferInfo);
+        writes
+            .get(1)
+            .dstSet(skyDescriptorSets[i])
             .dstBinding(1)
             .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
             .descriptorCount(1)
@@ -1794,6 +2641,25 @@ public final class WorldRenderer implements AutoCloseable {
     uniformBuffersMapped = new ByteBuffer[0];
   }
 
+  private void destroySkyUniformBuffers() {
+    VkDevice device = vulkan.getDevice();
+    for (int i = 0; i < skyUniformBuffers.length; i++) {
+      if (skyUniformBuffersMapped[i] != null) {
+        vkUnmapMemory(device, skyUniformBuffersMemory[i]);
+      }
+      if (skyUniformBuffers[i] != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, skyUniformBuffers[i], null);
+      }
+      if (skyUniformBuffersMemory[i] != VK_NULL_HANDLE) {
+        vkFreeMemory(device, skyUniformBuffersMemory[i], null);
+      }
+    }
+    skyUniformBuffers = new long[0];
+    skyUniformBuffersMemory = new long[0];
+    skyUniformBuffersMapped = new ByteBuffer[0];
+    skyDescriptorSets = new long[0];
+  }
+
   private void destroyTextureResources() {
     VkDevice device = vulkan.getDevice();
     if (textureSampler != VK_NULL_HANDLE) {
@@ -1811,6 +2677,26 @@ public final class WorldRenderer implements AutoCloseable {
     if (textureImageMemory != VK_NULL_HANDLE) {
       vkFreeMemory(device, textureImageMemory, null);
       textureImageMemory = VK_NULL_HANDLE;
+    }
+  }
+
+  private void destroySunTextureResources() {
+    VkDevice device = vulkan.getDevice();
+    if (sunSampler != VK_NULL_HANDLE) {
+      vkDestroySampler(device, sunSampler, null);
+      sunSampler = VK_NULL_HANDLE;
+    }
+    if (sunImageView != VK_NULL_HANDLE) {
+      vkDestroyImageView(device, sunImageView, null);
+      sunImageView = VK_NULL_HANDLE;
+    }
+    if (sunImage != VK_NULL_HANDLE) {
+      vkDestroyImage(device, sunImage, null);
+      sunImage = VK_NULL_HANDLE;
+    }
+    if (sunImageMemory != VK_NULL_HANDLE) {
+      vkFreeMemory(device, sunImageMemory, null);
+      sunImageMemory = VK_NULL_HANDLE;
     }
   }
 

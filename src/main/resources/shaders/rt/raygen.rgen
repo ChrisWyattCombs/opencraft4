@@ -1,0 +1,269 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+// Single payload location — TraceRay only carries one location index.
+struct HitPayload {
+  vec4 albedo; // rgb + faceShade (or sky/water tint)
+  vec4 hit;    // xyz hitPos, w = matId (0=miss, 1=opaque, 2=water)
+  vec4 normal; // xyz surface normal (water)
+};
+
+layout(binding = 0) uniform accelerationStructureEXT topLevelAS;
+layout(binding = 1, rgba8) uniform image2D outputImage;
+layout(binding = 2) uniform UniformBufferObject {
+  mat4 viewInverse;
+  mat4 projInverse;
+  vec4 cameraPosUnderwater;
+  vec4 fogParams;
+  vec4 fogColor;
+  vec4 sunDir;
+} ubo;
+
+layout(location = 0) rayPayloadEXT HitPayload hit;
+layout(location = 1) rayPayloadEXT uint shadowed;
+
+const vec3 SUN_COLOR = vec3(1.35, 1.22, 1.05);
+const vec3 AMBIENT = vec3(0.22, 0.26, 0.32);
+
+// Minecraft-style ray budgets: short near-only mirrors, no shadow on mirror hits.
+const float REFLECT_TMAX = 256.0;
+const float REFLECT_MAX_CAM_DIST = 96.0;
+
+// Cull masks (must match SceneTlas): near opaque=1, water=2, lod=4
+const uint MASK_NEAR = 0x01u;
+const uint MASK_WATER = 0x02u;
+const uint MASK_LOD = 0x04u;
+const uint MASK_PRIMARY = 0x07u; // near + water + lod
+const uint MASK_SHADOW = 0x05u;  // near + lod
+const uint MASK_MIRROR = 0x01u;  // near only — keep reflections off the huge LOD AS
+
+vec3 evalSky(vec3 dir) {
+  vec3 d = normalize(dir);
+  float h = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
+  vec3 col = mix(vec3(0.62, 0.78, 0.95), vec3(0.28, 0.52, 0.92), pow(h, 1.15));
+  if (d.y < 0.05) {
+    col = mix(vec3(0.75, 0.82, 0.88), col, clamp(d.y / 0.05, 0.0, 1.0));
+  }
+  vec3 sun = ubo.sunDir.xyz;
+  float sunLen2 = dot(sun, sun);
+  if (sunLen2 > 1e-6) {
+    sun *= inversesqrt(sunLen2);
+    col += vec3(1.0, 0.88, 0.65) * pow(max(dot(d, sun), 0.0), 12.0) * 0.18;
+  }
+  if (ubo.cameraPosUnderwater.w > 0.5) {
+    col = mix(col, vec3(0.02, 0.18, 0.35), 0.65);
+  }
+  return col;
+}
+
+void traceVis(vec3 origin, vec3 dir, uint cullMask) {
+  hit.albedo = vec4(0.0);
+  hit.hit = vec4(0.0);
+  hit.normal = vec4(0.0, 1.0, 0.0, 0.0);
+  traceRayEXT(
+      topLevelAS,
+      gl_RayFlagsNoneEXT,
+      cullMask,
+      0,
+      0,
+      0,
+      origin,
+      0.05,
+      dir,
+      20000.0,
+      0);
+}
+
+float traceShadow(vec3 origin, vec3 sunDir) {
+  shadowed = 1u;
+  traceRayEXT(
+      topLevelAS,
+      gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+      MASK_SHADOW,
+      0,
+      0,
+      1,
+      origin + sunDir * 0.1,
+      0.05,
+      sunDir,
+      4000.0,
+      1);
+  return (shadowed == 0u) ? 1.0 : 0.0;
+}
+
+vec3 fogBlend(vec3 shaded, vec3 hitPos, vec3 camPos) {
+  float dist = length(hitPos - camPos);
+  float fogStart = ubo.fogParams.x;
+  float fogEnd = max(ubo.fogParams.y, fogStart + 1.0);
+  float fog = clamp((dist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
+  fog = fog * fog * (3.0 - 2.0 * fog);
+  return mix(shaded, ubo.fogColor.rgb, fog);
+}
+
+vec3 shadeOpaque(vec3 camPos, vec3 sunDir) {
+  float face = hit.albedo.a;
+  vec3 albedo = hit.albedo.rgb;
+  vec3 hitPos = hit.hit.xyz;
+  float sunVis = traceShadow(hitPos, sunDir);
+  vec3 lighting = AMBIENT * face + SUN_COLOR * face * sunVis * 0.95;
+  lighting = mix(lighting, lighting * 0.22, 1.0 - sunVis);
+  vec3 shaded = max(albedo * lighting, vec3(0.02));
+  if (ubo.cameraPosUnderwater.w > 0.5) {
+    shaded = mix(shaded, vec3(0.04, 0.22, 0.42), 0.52);
+    shaded *= vec3(0.55, 0.8, 1.05);
+  }
+  return fogBlend(shaded, hitPos, camPos);
+}
+
+vec3 shadeOpaqueFast(vec3 camPos) {
+  float face = hit.albedo.a;
+  vec3 albedo = hit.albedo.rgb;
+  vec3 hitPos = hit.hit.xyz;
+  vec3 lighting = AMBIENT * face + SUN_COLOR * face * 0.55;
+  vec3 shaded = max(albedo * lighting, vec3(0.02));
+  return fogBlend(shaded, hitPos, camPos);
+}
+
+/**
+ * Cheap scene mirror: 1 visibility ray, short Tmax, no shadow, opaque-only.
+ * Called on a sparse pixel subset (Minecraft-style ray budget).
+ */
+vec3 traceWaterReflection(vec3 reflectOrigin, vec3 R, vec3 camPos) {
+  hit.albedo = vec4(0.0);
+  hit.hit = vec4(0.0);
+  hit.normal = vec4(0.0, 1.0, 0.0, 0.0);
+  traceRayEXT(
+      topLevelAS,
+      gl_RayFlagsTerminateOnFirstHitEXT,
+      MASK_MIRROR,
+      0,
+      0,
+      0,
+      reflectOrigin,
+      0.05,
+      R,
+      REFLECT_TMAX,
+      0);
+  float matId = hit.hit.w;
+  if (matId < 0.5) {
+    return hit.albedo.rgb;
+  }
+  // Fast shade only — never fire a shadow from the mirror hit.
+  return shadeOpaqueFast(camPos);
+}
+
+void main() {
+  const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
+  const vec2 inUV = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
+  vec2 d = inUV * 2.0 - 1.0;
+
+  vec4 origin4 = ubo.viewInverse * vec4(0, 0, 0, 1);
+  vec4 target = ubo.projInverse * vec4(d.x, d.y, 1, 1);
+  vec3 direction = normalize(vec3(ubo.viewInverse * vec4(normalize(target.xyz), 0)));
+  vec3 origin = origin4.xyz;
+  vec3 camPos = origin4.xyz;
+
+  vec3 sunRaw = ubo.sunDir.xyz;
+  float sunLen2 = dot(sunRaw, sunRaw);
+  vec3 SUN_DIR = sunLen2 > 1e-6 ? sunRaw * inversesqrt(sunLen2) : vec3(0.55, 0.82, 0.18);
+
+  vec3 color = vec3(0.0);
+  vec3 throughput = vec3(1.0);
+  bool done = false;
+
+  // At most: primary + (mirror OR transmission) + optional primary shadow.
+  for (int bounce = 0; bounce < 2 && !done; bounce++) {
+    uint mask = (bounce == 0) ? MASK_PRIMARY : MASK_NEAR;
+    traceVis(origin, direction, mask);
+
+    float matId = hit.hit.w;
+    if (matId < 0.5) {
+      color += throughput * hit.albedo.rgb;
+      done = true;
+      break;
+    }
+
+    vec3 hitPos = hit.hit.xyz;
+    float dist = length(hitPos - camPos);
+    float fogStart = ubo.fogParams.x;
+    float fogEnd = max(ubo.fogParams.y, fogStart + 1.0);
+    float fog = clamp((dist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
+    fog = fog * fog * (3.0 - 2.0 * fog);
+
+    if (matId > 1.5) {
+      vec3 N = normalize(hit.normal.xyz);
+      vec3 V = normalize(-direction);
+      if (dot(N, V) < 0.0) {
+        N = -N;
+      }
+      float cosTheta = clamp(dot(N, V), 0.0, 1.0);
+      // Stronger mirror response so shores read clearly.
+      float fresnel = mix(0.28, 0.90, pow(1.0 - cosTheta, 2.0));
+      const float waterOpacity = 0.38;
+      vec3 tint = hit.albedo.rgb;
+      vec3 R = normalize(reflect(direction, N));
+
+      vec3 H = normalize(V + SUN_DIR);
+      float spec = pow(clamp(dot(N, H), 0.0, 1.0), 120.0);
+      vec3 specular = vec3(1.0, 0.95, 0.8) * spec * (0.35 + 0.65 * fresnel);
+
+      // 1/4 checkerboard scene mirrors (near voxels only). Safe budget + visible.
+      bool sparseMirror =
+          bounce == 0
+          && fresnel > 0.22
+          && dist < REFLECT_MAX_CAM_DIST
+          && ((gl_LaunchIDEXT.x & 1u) == 0u)
+          && ((gl_LaunchIDEXT.y & 1u) == 0u);
+
+      vec3 reflected = evalSky(R);
+      if (sparseMirror) {
+        reflected = traceWaterReflection(hitPos + N * 0.12, R, camPos);
+        reflected = mix(reflected, evalSky(R), 0.08);
+      } else if (fresnel > 0.35) {
+        // Non-sample pixels still get sky mirror so water never looks matte.
+        reflected = evalSky(R);
+      }
+
+      float bodyW = waterOpacity * (1.0 - fresnel * 0.25);
+      // Never stack mirror TraceRay + transmission TraceRay on the same pixel.
+      bool doTransmit = bounce == 0 && !sparseMirror && fresnel < 0.60;
+
+      vec3 waterLayer = mix(tint, reflected, fresnel) + specular;
+      waterLayer = mix(waterLayer, ubo.fogColor.rgb, fog * 0.22);
+      waterLayer = mix(waterLayer, tint, bodyW * 0.25);
+
+      if (doTransmit) {
+        float seeThrough = clamp((1.0 - fresnel) * (1.0 - waterOpacity), 0.08, 0.50);
+        color += throughput * waterLayer * (1.0 - seeThrough);
+        origin = hitPos - N * 0.08;
+        throughput *= seeThrough * vec3(0.50, 0.75, 0.90);
+        continue;
+      }
+
+      color += throughput * waterLayer;
+      done = true;
+      break;
+    }
+
+    // Opaque
+    if (bounce == 0) {
+      color += throughput * shadeOpaque(camPos, SUN_DIR);
+    } else {
+      // Transmission bed: no shadow.
+      vec3 shaded = shadeOpaqueFast(camPos);
+      shaded *= vec3(1.12, 1.25, 1.32);
+      color += throughput * shaded;
+    }
+    done = true;
+  }
+
+  if (!done) {
+    color += throughput * evalSky(direction);
+  }
+
+  if (ubo.cameraPosUnderwater.w > 0.5) {
+    color = mix(color, vec3(0.04, 0.22, 0.42), 0.25);
+  }
+
+  imageStore(outputImage, ivec2(gl_LaunchIDEXT.xy), vec4(color, 1.0));
+}

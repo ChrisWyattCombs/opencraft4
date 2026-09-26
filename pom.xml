@@ -235,14 +235,10 @@
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.5.0</version>
                 <configuration>
+                    <!-- Default goal is exec:java (Windows/Linux). macOS profiles override for
+                         exec:exec so -XstartOnFirstThread can be passed to the JVM. -->
                     <mainClass>opencraft.Main</mainClass>
-                    <executable>java</executable>
                     <workingDirectory>${project.basedir}</workingDirectory>
-                    <arguments>
-                        <argument>-cp</argument>
-                        <classpath/>
-                        <argument>opencraft.Main</argument>
-                    </arguments>
                     <environmentVariables>
                         <PATH>${project.basedir}/run/natives${path.separator}${project.basedir}/natives/ultralight-legacy/bin${path.separator}${env.PATH}</PATH>
                     </environmentVariables>

@@ -60,6 +60,15 @@ public final class World {
   }
 
   /**
+   * Returns the terrain generator used for voxel fill and distant LOD sampling.
+   *
+   * @return terrain generator
+   */
+  public TerrainGenerator getTerrainGenerator() {
+    return terrainGenerator;
+  }
+
+  /**
    * Returns the on-disk world directory.
    *
    * @return world path
@@ -152,18 +161,32 @@ public final class World {
   }
 
   /**
-   * Saves and unloads chunks farther than {@code keepDistance} from the player chunk. When the
-   * player returns inside render distance, {@link #ensureChunkLoaded} reloads them from disk.
+   * Unloads chunks whose entire {@code sectionSize}×{@code sectionSize} section is farther than
+   * {@code keepDistance} from the player (Chebyshev). Sections are dropped as wholes.
    *
-   * @param playerChunk chunk containing the player
-   * @param keepDistance Chebyshev radius to keep in memory (usually renderDistance + hysteresis)
+   * @param playerChunk player chunk
+   * @param keepDistance max Chebyshev distance for a section's nearest corner
+   * @param sectionSize chunks per section edge (e.g. 8)
    */
-  public void unloadFarChunks(ChunkPos playerChunk, int keepDistance) {
+  public void unloadFarSections(ChunkPos playerChunk, int keepDistance, int sectionSize) {
+    int span = Math.max(1, sectionSize);
     List<ChunkPos> toRemove = new ArrayList<>();
     for (ChunkPos pos : chunks.keySet()) {
-      int dx = Math.abs(pos.x() - playerChunk.x());
-      int dz = Math.abs(pos.z() - playerChunk.z());
-      if (dx > keepDistance || dz > keepDistance) {
+      int sx = Math.floorDiv(pos.x(), span);
+      int sz = Math.floorDiv(pos.z(), span);
+      int minCx = sx * span;
+      int minCz = sz * span;
+      int maxCx = minCx + span - 1;
+      int maxCz = minCz + span - 1;
+      int nearCorner =
+          Math.min(
+              Math.min(
+                  Math.max(Math.abs(minCx - playerChunk.x()), Math.abs(minCz - playerChunk.z())),
+                  Math.max(Math.abs(maxCx - playerChunk.x()), Math.abs(minCz - playerChunk.z()))),
+              Math.min(
+                  Math.max(Math.abs(minCx - playerChunk.x()), Math.abs(maxCz - playerChunk.z())),
+                  Math.max(Math.abs(maxCx - playerChunk.x()), Math.abs(maxCz - playerChunk.z()))));
+      if (nearCorner > keepDistance) {
         toRemove.add(pos);
       }
     }
@@ -205,19 +228,29 @@ public final class World {
           region.removeChunk(localX, localZ);
         }
       }
-      if (region.loadedCount() == 0 && !regionHasActiveChunks(regionPos)) {
+      boolean anyLeft = false;
+      for (int z = 0; z < Region.REGION_SIZE && !anyLeft; z++) {
+        for (int x = 0; x < Region.REGION_SIZE; x++) {
+          if (region.getChunk(x, z) != null) {
+            anyLeft = true;
+            break;
+          }
+        }
+      }
+      if (!anyLeft) {
         regions.remove(regionPos);
       }
     }
   }
 
-  private boolean regionHasActiveChunks(RegionPos regionPos) {
-    for (ChunkPos pos : chunks.keySet()) {
-      if (toRegionPos(pos).equals(regionPos)) {
-        return true;
-      }
-    }
-    return false;
+  /**
+   * Unloads chunks farther than {@code keepDistance} from the player (Chebyshev).
+   *
+   * @param playerChunk player chunk
+   * @param keepDistance max Chebyshev distance to keep
+   */
+  public void unloadFarChunks(ChunkPos playerChunk, int keepDistance) {
+    unloadFarSections(playerChunk, keepDistance, 1);
   }
 
   private Chunk loadOrGenerateChunk(ChunkPos globalPos) {
