@@ -10,6 +10,7 @@ import com.labymedia.ultralight.bitmap.UltralightBitmapSurface;
 import com.labymedia.ultralight.config.FontHinting;
 import com.labymedia.ultralight.config.UltralightConfig;
 import com.labymedia.ultralight.config.UltralightViewConfig;
+import com.labymedia.ultralight.javascript.JavascriptEvaluationException;
 import com.labymedia.ultralight.plugin.clipboard.UltralightClipboard;
 import com.labymedia.ultralight.plugin.logging.UltralightLogLevel;
 import com.labymedia.ultralight.plugin.logging.UltralightLogger;
@@ -20,6 +21,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Comparator;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 import opencraft.graphics.Display;
 
@@ -30,26 +33,42 @@ import opencraft.graphics.Display;
  * {@link MenuBridge}, and uploads each frame to {@link Display#presentBGRA}.
  */
 public final class UltralightGui implements AutoCloseable {
+
+  /** In-game HUD overlay width in pixels. */
+  public static final int HUD_WIDTH = 240;
+
+  /** In-game HUD overlay height in pixels. */
+  public static final int HUD_HEIGHT = 56;
+
   private final Display display;
   private final Path runDir;
   private final Path uiDir;
   private final Path nativesDir;
   private final Path sdkDir;
+  private final Path worldsRoot;
 
   private UltralightRenderer renderer;
   private UltralightView view;
+  private UltralightView hudView;
   private MenuBridge bridge;
   private GuiInput input;
   private String currentPage = "main.html";
+  private BiConsumer<String, String> createWorldHandler;
+  private Consumer<String> loadWorldHandler;
+  private int lastHudFps = -1;
+  private int lastHudChunks = -1;
+  private long lastHudPaintNanos;
 
   /**
    * Creates a GUI host bound to the given display and project root.
    *
    * @param display Vulkan/GLFW display used for presentation and input
    * @param projectRoot project root containing {@code natives/} and writable {@code run/}
+   * @param worldsRoot folder containing saved worlds ({@code %APPDATA%/opencraft/worlds})
    */
-  public UltralightGui(Display display, Path projectRoot) {
+  public UltralightGui(Display display, Path projectRoot, Path worldsRoot) {
     this.display = display;
+    this.worldsRoot = worldsRoot;
     this.runDir = projectRoot.resolve("run");
     this.uiDir = runDir.resolve("ui");
     this.nativesDir = runDir.resolve("natives");
@@ -134,13 +153,77 @@ public final class UltralightGui implements AutoCloseable {
                 .initialDeviceScale(1.0)
                 .initialFocus(true));
 
-    bridge = new MenuBridge(this);
+    bridge = new MenuBridge(this, worldsRoot);
     view.setLoadListener(new GuiLoadListener(view, bridge));
     input = new GuiInput(display);
     input.bind(view);
 
     loadPage(currentPage);
     view.focus();
+
+    hudView =
+        renderer.createView(
+            HUD_WIDTH,
+            HUD_HEIGHT,
+            new UltralightViewConfig()
+                .isAccelerated(false)
+                .isTransparent(false)
+                .initialDeviceScale(1.0)
+                .initialFocus(false));
+    Path hudPath = uiDir.resolve("hud.html").toAbsolutePath().normalize();
+    hudView.loadURL(hudPath.toUri().toString());
+  }
+
+  /**
+   * Sets the handler invoked when the user confirms world creation.
+   *
+   * @param handler receives world name and seed text
+   */
+  public void setCreateWorldHandler(BiConsumer<String, String> handler) {
+    this.createWorldHandler = handler;
+  }
+
+  /**
+   * Sets the handler invoked when the user opens an existing world.
+   *
+   * @param handler receives the world folder name
+   */
+  public void setLoadWorldHandler(Consumer<String> handler) {
+    this.loadWorldHandler = handler;
+  }
+
+  /**
+   * Runs JavaScript in the active Ultralight view.
+   *
+   * @param script JavaScript source
+   * @throws IllegalStateException if script evaluation fails
+   */
+  public void runScript(String script) {
+    if (view != null) {
+      try {
+        view.evaluateScript(script);
+      } catch (JavascriptEvaluationException e) {
+        throw new IllegalStateException("Script evaluation failed", e);
+      }
+    }
+  }
+
+  /**
+   * Returns the create-world handler for the menu bridge.
+   *
+   * @return handler or {@code null}
+   */
+  BiConsumer<String, String> getCreateWorldHandler() {
+    return createWorldHandler;
+  }
+
+  /**
+   * Returns the load-world handler for the menu bridge.
+   *
+   * @return handler or {@code null}
+   */
+  Consumer<String> getLoadWorldHandler() {
+    return loadWorldHandler;
   }
 
   /**
@@ -154,6 +237,15 @@ public final class UltralightGui implements AutoCloseable {
     view.loadURL(pagePath.toUri().toString());
   }
 
+  /**
+   * Directory under the extracted UI root for singleplayer world thumbnails.
+   *
+   * @return {@code run/ui/world-icons}
+   */
+  Path worldIconsDir() {
+    return uiDir.resolve("world-icons");
+  }
+
   /** Updates Ultralight timers and paints dirty views for the current frame. */
   public void update() {
     if (view.width() != display.getWidth() || view.height() != display.getHeight()) {
@@ -161,6 +253,75 @@ public final class UltralightGui implements AutoCloseable {
     }
     renderer.update();
     renderer.render();
+  }
+
+  /**
+   * Updates the in-game HUD FPS / chunk counter (Ultralight) when values change.
+   *
+   * @param fps frames per second
+   * @param chunkMeshes resident chunk mesh count
+   */
+  public void updateHud(float fps, int chunkMeshes) {
+    if (hudView == null) {
+      return;
+    }
+    int fpsInt = Math.max(0, Math.round(fps));
+    long now = System.nanoTime();
+    // Avoid re-painting Ultralight every frame when the FPS integer jitters — that alone can
+    // pin the game near display refresh even with IMMEDIATE present.
+    boolean unchanged = fpsInt == lastHudFps && chunkMeshes == lastHudChunks;
+    if (unchanged || (now - lastHudPaintNanos < 200_000_000L && lastHudPaintNanos != 0L)) {
+      return;
+    }
+    lastHudFps = fpsInt;
+    lastHudChunks = chunkMeshes;
+    lastHudPaintNanos = now;
+    try {
+      hudView.evaluateScript("if(window.setHud){setHud(" + fpsInt + "," + chunkMeshes + ");}");
+    } catch (com.labymedia.ultralight.javascript.JavascriptEvaluationException e) {
+      // HUD is best-effort; ignore script races during load.
+    }
+    renderer.update();
+    renderer.render();
+  }
+
+  /**
+   * Locks HUD bitmap pixels for GPU upload. Caller must {@link #unlockHudPixels()}.
+   *
+   * @return BGRA pixels or {@code null}
+   */
+  public ByteBuffer lockHudPixels() {
+    if (hudView == null) {
+      return null;
+    }
+    UltralightBitmapSurface surface = (UltralightBitmapSurface) hudView.surface();
+    if (surface == null) {
+      return null;
+    }
+    return surface.bitmap().lockPixels();
+  }
+
+  /** Unlocks HUD bitmap pixels after {@link #lockHudPixels()}. */
+  public void unlockHudPixels() {
+    if (hudView == null) {
+      return;
+    }
+    UltralightBitmapSurface surface = (UltralightBitmapSurface) hudView.surface();
+    if (surface != null) {
+      surface.bitmap().unlockPixels();
+    }
+  }
+
+  /** @return HUD bitmap row stride in bytes */
+  public int hudRowBytes() {
+    if (hudView == null) {
+      return HUD_WIDTH * 4;
+    }
+    UltralightBitmapSurface surface = (UltralightBitmapSurface) hudView.surface();
+    if (surface == null) {
+      return HUD_WIDTH * 4;
+    }
+    return (int) surface.bitmap().rowBytes();
   }
 
   /** Copies the current Ultralight surface into the Vulkan swapchain and presents it. */
@@ -182,6 +343,7 @@ public final class UltralightGui implements AutoCloseable {
   /** Releases UI references. Native Ultralight cleanup is owned by process exit for now. */
   @Override
   public void close() {
+    hudView = null;
     view = null;
     renderer = null;
   }
@@ -209,6 +371,7 @@ public final class UltralightGui implements AutoCloseable {
       "ui/main.html",
       "ui/singleplayer.html",
       "ui/create_world.html",
+      "ui/hud.html",
       "ui/menu.css",
       "ui/menu.js",
       "ui/img/dirt.png",

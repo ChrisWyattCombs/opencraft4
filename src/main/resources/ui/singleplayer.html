@@ -7,14 +7,35 @@
 </head>
 <body>
   <div class="shade"></div>
-  <div class="screen">
+  <div class="screen" id="listScreen">
     <div class="panel">
       <h1 class="title">Singleplayer</h1>
-      <p class="subtitle">Choose a world or create a new one.</p>
+      <p class="subtitle">Select a world or create a new one.</p>
+      <div id="worldList" class="world-list">
+        <p class="hint" id="worldListEmpty">No worlds yet.</p>
+      </div>
       <button class="btn" onclick="goCreateWorld()">Create New World</button>
       <button class="btn secondary" onclick="goMain()">Back</button>
     </div>
   </div>
+  <div class="screen" id="progressScreen" style="display:none;">
+    <div class="panel">
+      <h1 class="title">Loading World</h1>
+      <p class="subtitle">Please wait…</p>
+      <p class="hint">Preparing terrain and renderer.</p>
+    </div>
+  </div>
   <script src="menu.js"></script>
+  <script>
+    function showLoading() {
+      var list = document.getElementById('listScreen');
+      var prog = document.getElementById('progressScreen');
+      if (list) list.style.display = 'none';
+      if (prog) prog.style.display = 'flex';
+    }
+    window.showLoading = showLoading;
+    setTimeout(refreshWorldList, 30);
+    setTimeout(refreshWorldList, 120);
+  </script>
 </body>
 </html>

@@ -1,39 +1,21 @@
 package opencraft.graphics;
 
-import static org.lwjgl.glfw.GLFW.glfwGetFramebufferSize;
 import static org.lwjgl.system.MemoryStack.stackPush;
-import static org.lwjgl.vulkan.KHRSurface.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-import static org.lwjgl.vulkan.KHRSurface.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-import static org.lwjgl.vulkan.KHRSurface.VK_PRESENT_MODE_FIFO_KHR;
-import static org.lwjgl.vulkan.KHRSurface.VK_PRESENT_MODE_MAILBOX_KHR;
-import static org.lwjgl.vulkan.KHRSurface.vkGetPhysicalDeviceSurfaceCapabilitiesKHR;
-import static org.lwjgl.vulkan.KHRSurface.vkGetPhysicalDeviceSurfaceFormatsKHR;
-import static org.lwjgl.vulkan.KHRSurface.vkGetPhysicalDeviceSurfacePresentModesKHR;
 import static org.lwjgl.vulkan.KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR;
 import static org.lwjgl.vulkan.KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 import static org.lwjgl.vulkan.KHRSwapchain.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-import static org.lwjgl.vulkan.KHRSwapchain.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 import static org.lwjgl.vulkan.KHRSwapchain.VK_SUBOPTIMAL_KHR;
 import static org.lwjgl.vulkan.KHRSwapchain.vkAcquireNextImageKHR;
-import static org.lwjgl.vulkan.KHRSwapchain.vkCreateSwapchainKHR;
-import static org.lwjgl.vulkan.KHRSwapchain.vkDestroySwapchainKHR;
-import static org.lwjgl.vulkan.KHRSwapchain.vkGetSwapchainImagesKHR;
 import static org.lwjgl.vulkan.KHRSwapchain.vkQueuePresentKHR;
 import static org.lwjgl.vulkan.VK10.VK_ACCESS_TRANSFER_WRITE_BIT;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 import static org.lwjgl.vulkan.VK10.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 import static org.lwjgl.vulkan.VK10.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 import static org.lwjgl.vulkan.VK10.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-import static org.lwjgl.vulkan.VK10.VK_COMPONENT_SWIZZLE_IDENTITY;
 import static org.lwjgl.vulkan.VK10.VK_FENCE_CREATE_SIGNALED_BIT;
-import static org.lwjgl.vulkan.VK10.VK_FORMAT_B8G8R8A8_SRGB;
-import static org.lwjgl.vulkan.VK10.VK_FORMAT_B8G8R8A8_UNORM;
 import static org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT;
 import static org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 import static org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_UNDEFINED;
-import static org.lwjgl.vulkan.VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-import static org.lwjgl.vulkan.VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-import static org.lwjgl.vulkan.VK10.VK_IMAGE_VIEW_TYPE_2D;
 import static org.lwjgl.vulkan.VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 import static org.lwjgl.vulkan.VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
 import static org.lwjgl.vulkan.VK10.VK_NULL_HANDLE;
@@ -41,7 +23,6 @@ import static org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
 import static org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 import static org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_TRANSFER_BIT;
 import static org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED;
-import static org.lwjgl.vulkan.VK10.VK_SHARING_MODE_CONCURRENT;
 import static org.lwjgl.vulkan.VK10.VK_SHARING_MODE_EXCLUSIVE;
 import static org.lwjgl.vulkan.VK10.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 import static org.lwjgl.vulkan.VK10.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -49,7 +30,6 @@ import static org.lwjgl.vulkan.VK10.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 import static org.lwjgl.vulkan.VK10.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 import static org.lwjgl.vulkan.VK10.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 import static org.lwjgl.vulkan.VK10.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-import static org.lwjgl.vulkan.VK10.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 import static org.lwjgl.vulkan.VK10.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 import static org.lwjgl.vulkan.VK10.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 import static org.lwjgl.vulkan.VK10.VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -63,12 +43,10 @@ import static org.lwjgl.vulkan.VK10.vkCmdPipelineBarrier;
 import static org.lwjgl.vulkan.VK10.vkCreateBuffer;
 import static org.lwjgl.vulkan.VK10.vkCreateCommandPool;
 import static org.lwjgl.vulkan.VK10.vkCreateFence;
-import static org.lwjgl.vulkan.VK10.vkCreateImageView;
 import static org.lwjgl.vulkan.VK10.vkCreateSemaphore;
 import static org.lwjgl.vulkan.VK10.vkDestroyBuffer;
 import static org.lwjgl.vulkan.VK10.vkDestroyCommandPool;
 import static org.lwjgl.vulkan.VK10.vkDestroyFence;
-import static org.lwjgl.vulkan.VK10.vkDestroyImageView;
 import static org.lwjgl.vulkan.VK10.vkDestroySemaphore;
 import static org.lwjgl.vulkan.VK10.vkEndCommandBuffer;
 import static org.lwjgl.vulkan.VK10.vkFreeMemory;
@@ -95,26 +73,17 @@ import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkExtent2D;
 import org.lwjgl.vulkan.VkFenceCreateInfo;
 import org.lwjgl.vulkan.VkImageMemoryBarrier;
-import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkMemoryAllocateInfo;
 import org.lwjgl.vulkan.VkMemoryRequirements;
 import org.lwjgl.vulkan.VkPresentInfoKHR;
 import org.lwjgl.vulkan.VkSemaphoreCreateInfo;
 import org.lwjgl.vulkan.VkSubmitInfo;
-import org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR;
-import org.lwjgl.vulkan.VkSurfaceFormatKHR;
-import org.lwjgl.vulkan.VkSwapchainCreateInfoKHR;
 
 /** Presents CPU-side BGRA8 frames by copying them into the Vulkan swapchain each frame. */
 public final class BgraFramePresenter implements AutoCloseable {
   private final GameWindow window;
   private final VulkanContext vulkan;
-
-  private long swapchain;
-  private long[] swapchainImages = new long[0];
-  private long[] swapchainImageViews = new long[0];
-  private int swapchainImageFormat;
-  private VkExtent2D swapchainExtent;
+  private final VulkanSwapchain swapchain;
 
   private long commandPool;
   private VkCommandBuffer[] commandBuffers = new VkCommandBuffer[0];
@@ -128,9 +97,10 @@ public final class BgraFramePresenter implements AutoCloseable {
   private long stagingCapacity;
   private ByteBuffer stagingMapped;
 
-  private BgraFramePresenter(GameWindow window, VulkanContext vulkan) {
+  private BgraFramePresenter(GameWindow window, VulkanContext vulkan, VulkanSwapchain swapchain) {
     this.window = window;
     this.vulkan = vulkan;
+    this.swapchain = swapchain;
   }
 
   /**
@@ -138,12 +108,12 @@ public final class BgraFramePresenter implements AutoCloseable {
    *
    * @param window render window
    * @param vulkan Vulkan device/surface context
+   * @param swapchain shared swapchain used for presentation
    * @return initialized presenter
    */
-  public static BgraFramePresenter create(GameWindow window, VulkanContext vulkan) {
-    BgraFramePresenter presenter = new BgraFramePresenter(window, vulkan);
-    presenter.createSwapchain();
-    presenter.createImageViews();
+  public static BgraFramePresenter create(
+      GameWindow window, VulkanContext vulkan, VulkanSwapchain swapchain) {
+    BgraFramePresenter presenter = new BgraFramePresenter(window, vulkan, swapchain);
     presenter.createCommandPool();
     presenter.createCommandBuffers();
     presenter.createSyncObjects();
@@ -160,8 +130,9 @@ public final class BgraFramePresenter implements AutoCloseable {
    */
   public void present(ByteBuffer pixels, int imageWidth, int imageHeight, int rowBytes) {
     if (window.wasFramebufferResized()) {
-      recreateSwapchain();
+      swapchain.recreate();
       window.clearFramebufferResized();
+      createCommandBuffers();
     }
 
     int required = rowBytes * imageHeight;
@@ -177,15 +148,27 @@ public final class BgraFramePresenter implements AutoCloseable {
       int result =
           vkAcquireNextImageKHR(
               device,
-              swapchain,
+              swapchain.getSwapchain(),
               -1L,
               imageAvailableSemaphores[currentFrame],
               VK_NULL_HANDLE,
               imageIndex);
 
       if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        recreateSwapchain();
-        return;
+        swapchain.recreate();
+        createCommandBuffers();
+        // Retry once so a resize during play does not leave a black frame.
+        result =
+            vkAcquireNextImageKHR(
+                device,
+                swapchain.getSwapchain(),
+                -1L,
+                imageAvailableSemaphores[currentFrame],
+                VK_NULL_HANDLE,
+                imageIndex);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+          return;
+        }
       }
       if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         throw new IllegalStateException("Failed to acquire swapchain image: " + result);
@@ -204,10 +187,11 @@ public final class BgraFramePresenter implements AutoCloseable {
               .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
       vkBeginCommandBuffer(cmd, beginInfo);
 
+      VkExtent2D swapchainExtent = swapchain.getExtent();
       transitionImageLayout(
           stack,
           cmd,
-          swapchainImages[index],
+          swapchain.getImages()[index],
           VK_IMAGE_LAYOUT_UNDEFINED,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
           0,
@@ -236,12 +220,16 @@ public final class BgraFramePresenter implements AutoCloseable {
               1);
 
       vkCmdCopyBufferToImage(
-          cmd, stagingBuffer, swapchainImages[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
+          cmd,
+          stagingBuffer,
+          swapchain.getImages()[index],
+          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+          region);
 
       transitionImageLayout(
           stack,
           cmd,
-          swapchainImages[index],
+          swapchain.getImages()[index],
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
           VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
           VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -269,7 +257,7 @@ public final class BgraFramePresenter implements AutoCloseable {
               .sType(VK_STRUCTURE_TYPE_PRESENT_INFO_KHR)
               .pWaitSemaphores(stack.longs(renderFinishedSemaphores[currentFrame]))
               .swapchainCount(1)
-              .pSwapchains(stack.longs(swapchain))
+              .pSwapchains(stack.longs(swapchain.getSwapchain()))
               .pImageIndices(stack.ints(index));
 
       result = vkQueuePresentKHR(vulkan.getPresentQueue(), presentInfo);
@@ -277,7 +265,8 @@ public final class BgraFramePresenter implements AutoCloseable {
           || result == VK_SUBOPTIMAL_KHR
           || window.wasFramebufferResized()) {
         window.clearFramebufferResized();
-        recreateSwapchain();
+        swapchain.recreate();
+        createCommandBuffers();
       } else if (result != VK_SUCCESS) {
         throw new IllegalStateException("Failed to present swapchain image: " + result);
       }
@@ -305,169 +294,6 @@ public final class BgraFramePresenter implements AutoCloseable {
       vkDestroyCommandPool(device, commandPool, null);
       commandPool = VK_NULL_HANDLE;
     }
-    cleanupSwapchain();
-  }
-
-  private void createSwapchain() {
-    VkDevice device = vulkan.getDevice();
-    try (MemoryStack stack = stackPush()) {
-      SwapchainSupportDetails support = querySwapchainSupport(stack);
-      VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(support.formats);
-      int presentMode = chooseSwapPresentMode(support.presentModes);
-      VkExtent2D extent = chooseSwapExtent(support.capabilities, stack);
-
-      int imageCount = support.capabilities.minImageCount() + 1;
-      if (support.capabilities.maxImageCount() > 0
-          && imageCount > support.capabilities.maxImageCount()) {
-        imageCount = support.capabilities.maxImageCount();
-      }
-
-      VkSwapchainCreateInfoKHR createInfo =
-          VkSwapchainCreateInfoKHR.calloc(stack)
-              .sType(VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR)
-              .surface(vulkan.getSurface())
-              .minImageCount(imageCount)
-              .imageFormat(surfaceFormat.format())
-              .imageColorSpace(surfaceFormat.colorSpace())
-              .imageExtent(extent)
-              .imageArrayLayers(1)
-              .imageUsage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)
-              .preTransform(support.capabilities.currentTransform())
-              .compositeAlpha(VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
-              .presentMode(presentMode)
-              .clipped(true)
-              .oldSwapchain(VK_NULL_HANDLE);
-
-      int graphicsFamily = vulkan.getGraphicsQueueFamily();
-      int presentFamily = vulkan.getPresentQueueFamily();
-      if (graphicsFamily != presentFamily) {
-        createInfo
-            .imageSharingMode(VK_SHARING_MODE_CONCURRENT)
-            .pQueueFamilyIndices(stack.ints(graphicsFamily, presentFamily));
-      } else {
-        createInfo.imageSharingMode(VK_SHARING_MODE_EXCLUSIVE);
-      }
-
-      LongBuffer swapchainPtr = stack.mallocLong(1);
-      VulkanContext.checkVk(
-          vkCreateSwapchainKHR(device, createInfo, null, swapchainPtr), "create swapchain");
-      swapchain = swapchainPtr.get(0);
-      swapchainImageFormat = surfaceFormat.format();
-      if (swapchainExtent != null) {
-        swapchainExtent.free();
-      }
-      swapchainExtent = VkExtent2D.malloc().set(extent.width(), extent.height());
-
-      IntBuffer imageCountBuf = stack.ints(0);
-      vkGetSwapchainImagesKHR(device, swapchain, imageCountBuf, null);
-      LongBuffer images = stack.mallocLong(imageCountBuf.get(0));
-      vkGetSwapchainImagesKHR(device, swapchain, imageCountBuf, images);
-      swapchainImages = new long[images.capacity()];
-      for (int i = 0; i < images.capacity(); i++) {
-        swapchainImages[i] = images.get(i);
-      }
-    }
-  }
-
-  private VkSurfaceFormatKHR chooseSwapSurfaceFormat(VkSurfaceFormatKHR.Buffer formats) {
-    for (int i = 0; i < formats.capacity(); i++) {
-      VkSurfaceFormatKHR format = formats.get(i);
-      if ((format.format() == VK_FORMAT_B8G8R8A8_UNORM
-              || format.format() == VK_FORMAT_B8G8R8A8_SRGB)
-          && format.colorSpace() == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-        return format;
-      }
-    }
-    return formats.get(0);
-  }
-
-  private int chooseSwapPresentMode(IntBuffer presentModes) {
-    for (int i = 0; i < presentModes.capacity(); i++) {
-      if (presentModes.get(i) == VK_PRESENT_MODE_MAILBOX_KHR) {
-        return VK_PRESENT_MODE_MAILBOX_KHR;
-      }
-    }
-    return VK_PRESENT_MODE_FIFO_KHR;
-  }
-
-  private VkExtent2D chooseSwapExtent(VkSurfaceCapabilitiesKHR capabilities, MemoryStack stack) {
-    if (capabilities.currentExtent().width() != 0xFFFFFFFF) {
-      return capabilities.currentExtent();
-    }
-    IntBuffer width = stack.ints(0);
-    IntBuffer height = stack.ints(0);
-    glfwGetFramebufferSize(window.getHandle(), width, height);
-    VkExtent2D actual = VkExtent2D.malloc(stack).set(width.get(0), height.get(0));
-    actual.width(
-        clamp(
-            actual.width(),
-            capabilities.minImageExtent().width(),
-            capabilities.maxImageExtent().width()));
-    actual.height(
-        clamp(
-            actual.height(),
-            capabilities.minImageExtent().height(),
-            capabilities.maxImageExtent().height()));
-    return actual;
-  }
-
-  private static int clamp(int value, int min, int max) {
-    return Math.max(min, Math.min(max, value));
-  }
-
-  private SwapchainSupportDetails querySwapchainSupport(MemoryStack stack) {
-    SwapchainSupportDetails details = new SwapchainSupportDetails();
-    details.capabilities = VkSurfaceCapabilitiesKHR.malloc(stack);
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-        vulkan.getPhysicalDevice(), vulkan.getSurface(), details.capabilities);
-
-    IntBuffer formatCount = stack.ints(0);
-    vkGetPhysicalDeviceSurfaceFormatsKHR(
-        vulkan.getPhysicalDevice(), vulkan.getSurface(), formatCount, null);
-    details.formats = VkSurfaceFormatKHR.malloc(formatCount.get(0), stack);
-    vkGetPhysicalDeviceSurfaceFormatsKHR(
-        vulkan.getPhysicalDevice(), vulkan.getSurface(), formatCount, details.formats);
-
-    IntBuffer presentModeCount = stack.ints(0);
-    vkGetPhysicalDeviceSurfacePresentModesKHR(
-        vulkan.getPhysicalDevice(), vulkan.getSurface(), presentModeCount, null);
-    details.presentModes = stack.mallocInt(presentModeCount.get(0));
-    vkGetPhysicalDeviceSurfacePresentModesKHR(
-        vulkan.getPhysicalDevice(), vulkan.getSurface(), presentModeCount, details.presentModes);
-    return details;
-  }
-
-  private void createImageViews() {
-    VkDevice device = vulkan.getDevice();
-    swapchainImageViews = new long[swapchainImages.length];
-    try (MemoryStack stack = stackPush()) {
-      for (int i = 0; i < swapchainImages.length; i++) {
-        VkImageViewCreateInfo createInfo =
-            VkImageViewCreateInfo.calloc(stack)
-                .sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
-                .image(swapchainImages[i])
-                .viewType(VK_IMAGE_VIEW_TYPE_2D)
-                .format(swapchainImageFormat);
-        createInfo
-            .components()
-            .r(VK_COMPONENT_SWIZZLE_IDENTITY)
-            .g(VK_COMPONENT_SWIZZLE_IDENTITY)
-            .b(VK_COMPONENT_SWIZZLE_IDENTITY)
-            .a(VK_COMPONENT_SWIZZLE_IDENTITY);
-        createInfo
-            .subresourceRange()
-            .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
-            .baseMipLevel(0)
-            .levelCount(1)
-            .baseArrayLayer(0)
-            .layerCount(1);
-
-        LongBuffer view = stack.mallocLong(1);
-        VulkanContext.checkVk(
-            vkCreateImageView(device, createInfo, null, view), "create image views");
-        swapchainImageViews[i] = view.get(0);
-      }
-    }
   }
 
   private void createCommandPool() {
@@ -485,7 +311,7 @@ public final class BgraFramePresenter implements AutoCloseable {
   }
 
   private void createCommandBuffers() {
-    int count = Math.max(2, swapchainImages.length);
+    int count = Math.max(2, swapchain.getImageCount());
     commandBuffers = new VkCommandBuffer[count];
     try (MemoryStack stack = stackPush()) {
       VkCommandBufferAllocateInfo allocInfo =
@@ -613,30 +439,6 @@ public final class BgraFramePresenter implements AutoCloseable {
     vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, null, null, barrier);
   }
 
-  private void recreateSwapchain() {
-    window.waitWhileMinimized();
-    vulkan.waitIdle();
-    cleanupSwapchain();
-    createSwapchain();
-    createImageViews();
-  }
-
-  private void cleanupSwapchain() {
-    VkDevice device = vulkan.getDevice();
-    for (long view : swapchainImageViews) {
-      vkDestroyImageView(device, view, null);
-    }
-    swapchainImageViews = new long[0];
-    if (swapchain != VK_NULL_HANDLE) {
-      vkDestroySwapchainKHR(device, swapchain, null);
-      swapchain = VK_NULL_HANDLE;
-    }
-    if (swapchainExtent != null) {
-      swapchainExtent.free();
-      swapchainExtent = null;
-    }
-  }
-
   private void destroyStaging() {
     VkDevice device = vulkan.getDevice();
     if (stagingMapped != null) {
@@ -652,11 +454,5 @@ public final class BgraFramePresenter implements AutoCloseable {
       stagingMemory = VK_NULL_HANDLE;
     }
     stagingCapacity = 0;
-  }
-
-  private static final class SwapchainSupportDetails {
-    private VkSurfaceCapabilitiesKHR capabilities;
-    private VkSurfaceFormatKHR.Buffer formats;
-    private IntBuffer presentModes;
   }
 }

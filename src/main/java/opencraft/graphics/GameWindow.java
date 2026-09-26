@@ -1,6 +1,7 @@
 package opencraft.graphics;
 
 import static org.lwjgl.glfw.GLFW.GLFW_CLIENT_API;
+import static org.lwjgl.glfw.GLFW.GLFW_DONT_CARE;
 import static org.lwjgl.glfw.GLFW.GLFW_FALSE;
 import static org.lwjgl.glfw.GLFW.GLFW_NO_API;
 import static org.lwjgl.glfw.GLFW.GLFW_RESIZABLE;
@@ -12,10 +13,12 @@ import static org.lwjgl.glfw.GLFW.glfwDestroyWindow;
 import static org.lwjgl.glfw.GLFW.glfwGetFramebufferSize;
 import static org.lwjgl.glfw.GLFW.glfwGetPrimaryMonitor;
 import static org.lwjgl.glfw.GLFW.glfwGetVideoMode;
+import static org.lwjgl.glfw.GLFW.glfwGetWindowPos;
 import static org.lwjgl.glfw.GLFW.glfwGetWindowSize;
 import static org.lwjgl.glfw.GLFW.glfwInit;
 import static org.lwjgl.glfw.GLFW.glfwPollEvents;
 import static org.lwjgl.glfw.GLFW.glfwSetFramebufferSizeCallback;
+import static org.lwjgl.glfw.GLFW.glfwSetWindowMonitor;
 import static org.lwjgl.glfw.GLFW.glfwSetWindowPos;
 import static org.lwjgl.glfw.GLFW.glfwSetWindowShouldClose;
 import static org.lwjgl.glfw.GLFW.glfwShowWindow;
@@ -46,11 +49,18 @@ public final class GameWindow implements AutoCloseable {
   private int width;
   private int height;
   private boolean framebufferResized;
+  private boolean fullscreen;
+  private int windowedX;
+  private int windowedY;
+  private int windowedWidth = DEFAULT_WIDTH;
+  private int windowedHeight = DEFAULT_HEIGHT;
 
   private GameWindow(long handle, int width, int height) {
     this.handle = handle;
     this.width = width;
     this.height = height;
+    this.windowedWidth = width;
+    this.windowedHeight = height;
   }
 
   /**
@@ -126,6 +136,65 @@ public final class GameWindow implements AutoCloseable {
   /** Polls and dispatches pending GLFW window/input events. */
   public void pollEvents() {
     glfwPollEvents();
+  }
+
+  /**
+   * Toggles exclusive fullscreen on the primary monitor. Borderless (monitor=null) still goes
+   * through DWM and often stays locked at 60; exclusive fullscreen can use Independent Flip.
+   */
+  public void toggleFullscreen() {
+    long monitor = glfwGetPrimaryMonitor();
+    var vidmode = glfwGetVideoMode(monitor);
+    if (vidmode == null) {
+      return;
+    }
+    if (!fullscreen) {
+      try (MemoryStack stack = stackPush()) {
+        IntBuffer x = stack.mallocInt(1);
+        IntBuffer y = stack.mallocInt(1);
+        glfwGetWindowPos(handle, x, y);
+        windowedX = x.get(0);
+        windowedY = y.get(0);
+        IntBuffer w = stack.mallocInt(1);
+        IntBuffer h = stack.mallocInt(1);
+        glfwGetWindowSize(handle, w, h);
+        windowedWidth = w.get(0);
+        windowedHeight = h.get(0);
+      }
+      glfwSetWindowMonitor(
+          handle,
+          monitor,
+          0,
+          0,
+          vidmode.width(),
+          vidmode.height(),
+          vidmode.refreshRate());
+      fullscreen = true;
+      System.out.println(
+          "[Opencraft] exclusive fullscreen "
+              + vidmode.width()
+              + "x"
+              + vidmode.height()
+              + "@"
+              + vidmode.refreshRate());
+    } else {
+      glfwSetWindowMonitor(
+          handle,
+          NULL,
+          windowedX,
+          windowedY,
+          windowedWidth,
+          windowedHeight,
+          GLFW_DONT_CARE);
+      fullscreen = false;
+      System.out.println("[Opencraft] windowed " + windowedWidth + "x" + windowedHeight);
+    }
+    framebufferResized = true;
+  }
+
+  /** @return whether the window is currently exclusive fullscreen */
+  public boolean isFullscreen() {
+    return fullscreen;
   }
 
   /** Requests that the window close on the next main-loop check. */

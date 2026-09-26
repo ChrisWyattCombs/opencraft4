@@ -88,6 +88,15 @@
             <groupId>org.lwjgl</groupId>
             <artifactId>lwjgl-stb</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-shaderc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.joml</groupId>
+            <artifactId>joml</artifactId>
+            <version>1.10.8</version>
+        </dependency>
 
         <dependency>
             <groupId>org.lwjgl</groupId>
@@ -104,6 +113,12 @@
         <dependency>
             <groupId>org.lwjgl</groupId>
             <artifactId>lwjgl-stb</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-shaderc</artifactId>
             <classifier>${lwjgl.natives}</classifier>
             <scope>runtime</scope>
         </dependency>
@@ -147,6 +162,9 @@
                 <configuration>
                     <mainClass>opencraft.Main</mainClass>
                     <workingDirectory>${project.basedir}</workingDirectory>
+                    <environmentVariables>
+                        <PATH>${project.basedir}/run/natives${path.separator}${project.basedir}/natives/ultralight-legacy/bin${path.separator}${env.PATH}</PATH>
+                    </environmentVariables>
                 </configuration>
             </plugin>
         </plugins>

@@ -20,6 +20,7 @@ public final class Display implements AutoCloseable {
 
   private GameWindow window;
   private VulkanContext vulkan;
+  private VulkanSwapchain swapchain;
   private BgraFramePresenter presenter;
 
   /**
@@ -56,7 +57,52 @@ public final class Display implements AutoCloseable {
       throw new IllegalStateException("Vulkan already initialized");
     }
     vulkan = VulkanContext.create(window);
-    presenter = BgraFramePresenter.create(window, vulkan);
+    swapchain = VulkanSwapchain.create(window, vulkan);
+    presenter = BgraFramePresenter.create(window, vulkan, swapchain);
+  }
+
+  /**
+   * Recreates the swapchain when the framebuffer size changed.
+   *
+   * @return {@code true} if a recreate was performed
+   */
+  public boolean recreateSwapchainIfNeeded() {
+    if (!requireWindow().wasFramebufferResized()) {
+      return false;
+    }
+    requireSwapchain().recreate();
+    window.clearFramebufferResized();
+    return true;
+  }
+
+  /**
+   * Returns the game window wrapper.
+   *
+   * @return window instance
+   */
+  public GameWindow getGameWindow() {
+    return requireWindow();
+  }
+
+  /**
+   * Returns the Vulkan context.
+   *
+   * @return Vulkan context
+   */
+  public VulkanContext getVulkanContext() {
+    if (vulkan == null) {
+      throw new IllegalStateException("Vulkan has not been initialized");
+    }
+    return vulkan;
+  }
+
+  /**
+   * Returns the shared swapchain.
+   *
+   * @return swapchain
+   */
+  public VulkanSwapchain getSwapchain() {
+    return requireSwapchain();
   }
 
   /**
@@ -162,12 +208,43 @@ public final class Display implements AutoCloseable {
     requirePresenter().present(pixels, imageWidth, imageHeight, rowBytes);
   }
 
+  /**
+   * Tears down the Ultralight BGRA presenter so the world renderer can own the swapchain alone.
+   *
+   * <p>Safe to call more than once. Does not destroy the swapchain or device.
+   */
+  public void releasePresenter() {
+    if (presenter != null) {
+      presenter.close();
+      presenter = null;
+    }
+    if (vulkan != null) {
+      vulkan.waitIdle();
+    }
+  }
+
+  /** Recreates the BGRA presenter if it was released (for example after returning to the menu). */
+  public void ensurePresenter() {
+    requireWindow();
+    requireSwapchain();
+    if (presenter == null) {
+      if (vulkan != null) {
+        vulkan.waitIdle();
+      }
+      presenter = BgraFramePresenter.create(window, vulkan, swapchain);
+    }
+  }
+
   /** Releases Vulkan objects and destroys the GLFW window. */
   @Override
   public void close() {
     if (presenter != null) {
       presenter.close();
       presenter = null;
+    }
+    if (swapchain != null) {
+      swapchain.close();
+      swapchain = null;
     }
     if (vulkan != null) {
       vulkan.close();
@@ -191,5 +268,12 @@ public final class Display implements AutoCloseable {
       throw new IllegalStateException("Vulkan presenter has not been initialized");
     }
     return presenter;
+  }
+
+  private VulkanSwapchain requireSwapchain() {
+    if (swapchain == null) {
+      throw new IllegalStateException("Swapchain has not been initialized");
+    }
+    return swapchain;
   }
 }

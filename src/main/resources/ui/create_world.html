@@ -7,24 +7,60 @@
 </head>
 <body>
   <div class="shade"></div>
-  <div class="screen">
+  <div class="screen" id="formScreen">
     <div class="panel">
       <h1 class="title">Create New World</h1>
       <div class="field">
         <label for="worldName">World Name</label>
-        <input id="worldName" type="text" value="New World" maxlength="32" spellcheck="false">
+        <input id="worldName" type="text" value="New World" maxlength="32" spellcheck="false" autocomplete="off">
       </div>
       <div class="field">
         <label for="worldSeed">Seed</label>
-        <input id="worldSeed" type="text" placeholder="Leave blank for random" maxlength="64" spellcheck="false">
+        <input id="worldSeed" type="text" placeholder="Leave blank for random" maxlength="64" spellcheck="false" autocomplete="off">
       </div>
+      <p class="error" id="createError" style="display:none;"></p>
       <div class="row">
-        <button class="btn secondary" onclick="goSingleplayer()">Back</button>
-        <button class="btn" onclick="submitCreateWorld()">Create</button>
+        <button type="button" class="btn secondary" onclick="goSingleplayer()">Back</button>
+        <button type="button" class="btn" id="createBtn" onclick="submitCreateWorld()">Create</button>
       </div>
-      <p class="hint">Create is wired up, but world generation is not implemented yet.</p>
+      <p class="hint">Blank seed picks a random value.</p>
+    </div>
+  </div>
+  <div class="screen" id="progressScreen" style="display:none;">
+    <div class="panel">
+      <h1 class="title">Loading World</h1>
+      <p class="subtitle" id="progressLabel">Please wait…</p>
+      <p class="hint">Preparing terrain and renderer.</p>
     </div>
   </div>
   <script src="menu.js"></script>
+  <script>
+    function showLoading() {
+      var form = document.getElementById('formScreen');
+      var prog = document.getElementById('progressScreen');
+      if (form) form.style.display = 'none';
+      if (prog) prog.style.display = 'flex';
+    }
+    function showCreateError(msg) {
+      createSubmitted = false;
+      var btn = document.getElementById('createBtn');
+      if (btn) {
+        btn.disabled = false;
+        btn.onclick = submitCreateWorld;
+      }
+      var err = document.getElementById('createError');
+      if (err) {
+        err.style.display = 'block';
+        err.textContent = msg || 'Could not create world';
+      }
+      var form = document.getElementById('formScreen');
+      var prog = document.getElementById('progressScreen');
+      if (form) form.style.display = 'flex';
+      if (prog) prog.style.display = 'none';
+    }
+    window.showLoading = showLoading;
+    window.showCreateError = showCreateError;
+    window.onGenProgress = function () { showLoading(); };
+  </script>
 </body>
 </html>

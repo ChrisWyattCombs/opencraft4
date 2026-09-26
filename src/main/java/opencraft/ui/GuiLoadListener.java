@@ -62,6 +62,16 @@ final class GuiLoadListener implements UltralightLoadListener {
   /** {@inheritDoc} */
   @Override
   public void onWindowObjectReady(long frameId, boolean isMainFrame, String url) {
+    injectBridge(isMainFrame);
+  }
+
+  /** {@inheritDoc} */
+  @Override
+  public void onDOMReady(long frameId, boolean isMainFrame, String url) {
+    injectBridge(isMainFrame);
+  }
+
+  private void injectBridge(boolean isMainFrame) {
     if (!isMainFrame) {
       return;
     }
@@ -73,8 +83,4 @@ final class GuiLoadListener implements UltralightLoadListener {
       globalObject.setProperty("opencraft", jsBridge, 0);
     }
   }
-
-  /** {@inheritDoc} */
-  @Override
-  public void onDOMReady(long frameId, boolean isMainFrame, String url) {}
 }

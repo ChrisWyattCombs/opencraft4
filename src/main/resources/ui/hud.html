@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>HUD</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #101820;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    }
+    #panel {
+      width: 100%;
+      height: 100%;
+      padding: 8px 12px;
+      color: #f2f6fa;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 2px;
+    }
+    #fps {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-shadow: 0 1px 0 #000;
+    }
+    #meta {
+      font-size: 12px;
+      opacity: 0.8;
+    }
+  </style>
+</head>
+<body>
+  <div id="panel">
+    <div id="fps">FPS --</div>
+    <div id="meta">chunks --</div>
+  </div>
+  <script>
+    function setHud(fps, chunks) {
+      var fpsEl = document.getElementById("fps");
+      var metaEl = document.getElementById("meta");
+      if (fpsEl) fpsEl.textContent = "FPS " + fps;
+      if (metaEl) metaEl.textContent = "chunks " + chunks;
+    }
+    window.setHud = setHud;
+  </script>
+</body>
+</html>

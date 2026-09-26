@@ -372,7 +372,13 @@ public final class VulkanContext implements AutoCloseable {
     return indices;
   }
 
-  static void checkVk(int result, String action) {
+  /**
+   * Throws if a Vulkan call failed.
+   *
+   * @param result Vulkan result code
+   * @param action description used in the error message
+   */
+  public static void checkVk(int result, String action) {
     if (result != VK_SUCCESS) {
       throw new IllegalStateException("Failed to " + action + ": " + result);
     }

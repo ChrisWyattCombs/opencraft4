@@ -1,0 +1,1927 @@
+package opencraft.graphics.render;
+
+import static org.lwjgl.stb.STBImageWrite.stbi_write_png;
+import static org.lwjgl.system.MemoryStack.stackPush;
+import static org.lwjgl.system.MemoryUtil.memFree;
+import static org.lwjgl.util.shaderc.Shaderc.shaderc_fragment_shader;
+import static org.lwjgl.util.shaderc.Shaderc.shaderc_vertex_shader;
+import static org.lwjgl.vulkan.KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR;
+import static org.lwjgl.vulkan.KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+import static org.lwjgl.vulkan.KHRSwapchain.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+import static org.lwjgl.vulkan.KHRSwapchain.VK_SUBOPTIMAL_KHR;
+import static org.lwjgl.vulkan.KHRSwapchain.vkAcquireNextImageKHR;
+import static org.lwjgl.vulkan.KHRSwapchain.vkQueuePresentKHR;
+import static org.lwjgl.vulkan.VK10.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+import static org.lwjgl.vulkan.VK10.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+import static org.lwjgl.vulkan.VK10.VK_ACCESS_TRANSFER_READ_BIT;
+import static org.lwjgl.vulkan.VK10.VK_ACCESS_TRANSFER_WRITE_BIT;
+import static org.lwjgl.vulkan.VK10.VK_ATTACHMENT_LOAD_OP_CLEAR;
+import static org.lwjgl.vulkan.VK10.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+import static org.lwjgl.vulkan.VK10.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+import static org.lwjgl.vulkan.VK10.VK_ATTACHMENT_STORE_OP_STORE;
+import static org.lwjgl.vulkan.VK10.VK_BLEND_FACTOR_ONE;
+import static org.lwjgl.vulkan.VK10.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+import static org.lwjgl.vulkan.VK10.VK_BLEND_FACTOR_SRC_ALPHA;
+import static org.lwjgl.vulkan.VK10.VK_BLEND_OP_ADD;
+import static org.lwjgl.vulkan.VK10.VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+import static org.lwjgl.vulkan.VK10.VK_COLOR_COMPONENT_A_BIT;
+import static org.lwjgl.vulkan.VK10.VK_COLOR_COMPONENT_B_BIT;
+import static org.lwjgl.vulkan.VK10.VK_COLOR_COMPONENT_G_BIT;
+import static org.lwjgl.vulkan.VK10.VK_COLOR_COMPONENT_R_BIT;
+import static org.lwjgl.vulkan.VK10.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+import static org.lwjgl.vulkan.VK10.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+import static org.lwjgl.vulkan.VK10.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+import static org.lwjgl.vulkan.VK10.VK_COMPARE_OP_LESS;
+import static org.lwjgl.vulkan.VK10.VK_CULL_MODE_BACK_BIT;
+import static org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+import static org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+import static org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+import static org.lwjgl.vulkan.VK10.VK_DYNAMIC_STATE_SCISSOR;
+import static org.lwjgl.vulkan.VK10.VK_DYNAMIC_STATE_VIEWPORT;
+import static org.lwjgl.vulkan.VK10.VK_FENCE_CREATE_SIGNALED_BIT;
+import static org.lwjgl.vulkan.VK10.VK_FILTER_NEAREST;
+import static org.lwjgl.vulkan.VK10.VK_FORMAT_B8G8R8A8_UNORM;
+import static org.lwjgl.vulkan.VK10.VK_FORMAT_D32_SFLOAT;
+import static org.lwjgl.vulkan.VK10.VK_FORMAT_R32G32B32_SFLOAT;
+import static org.lwjgl.vulkan.VK10.VK_FORMAT_R32G32_SFLOAT;
+import static org.lwjgl.vulkan.VK10.VK_FORMAT_R32_SFLOAT;
+import static org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM;
+import static org.lwjgl.vulkan.VK10.VK_FRONT_FACE_CLOCKWISE;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_DEPTH_BIT;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_UNDEFINED;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_TILING_OPTIMAL;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_TYPE_2D;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_USAGE_SAMPLED_BIT;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+import static org.lwjgl.vulkan.VK10.VK_IMAGE_VIEW_TYPE_2D;
+import static org.lwjgl.vulkan.VK10.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+import static org.lwjgl.vulkan.VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+import static org.lwjgl.vulkan.VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+import static org.lwjgl.vulkan.VK10.VK_NULL_HANDLE;
+import static org.lwjgl.vulkan.VK10.VK_PIPELINE_BIND_POINT_GRAPHICS;
+import static org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+import static org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+import static org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+import static org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+import static org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_TRANSFER_BIT;
+import static org.lwjgl.vulkan.VK10.VK_POLYGON_MODE_FILL;
+import static org.lwjgl.vulkan.VK10.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+import static org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED;
+import static org.lwjgl.vulkan.VK10.VK_SAMPLER_ADDRESS_MODE_REPEAT;
+import static org.lwjgl.vulkan.VK10.VK_SAMPLER_MIPMAP_MODE_NEAREST;
+import static org.lwjgl.vulkan.VK10.VK_SAMPLE_COUNT_1_BIT;
+import static org.lwjgl.vulkan.VK10.VK_SHADER_STAGE_FRAGMENT_BIT;
+import static org.lwjgl.vulkan.VK10.VK_SHADER_STAGE_VERTEX_BIT;
+import static org.lwjgl.vulkan.VK10.VK_SHARING_MODE_EXCLUSIVE;
+import static org.lwjgl.vulkan.VK10.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+import static org.lwjgl.vulkan.VK10.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+import static org.lwjgl.vulkan.VK10.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+import static org.lwjgl.vulkan.VK10.VK_SUBPASS_CONTENTS_INLINE;
+import static org.lwjgl.vulkan.VK10.VK_SUBPASS_EXTERNAL;
+import static org.lwjgl.vulkan.VK10.VK_SUCCESS;
+import static org.lwjgl.vulkan.VK10.VK_VERTEX_INPUT_RATE_VERTEX;
+import static org.lwjgl.vulkan.VK10.vkAllocateCommandBuffers;
+import static org.lwjgl.vulkan.VK10.vkAllocateDescriptorSets;
+import static org.lwjgl.vulkan.VK10.vkAllocateMemory;
+import static org.lwjgl.vulkan.VK10.vkBeginCommandBuffer;
+import static org.lwjgl.vulkan.VK10.vkBindBufferMemory;
+import static org.lwjgl.vulkan.VK10.vkCmdBeginRenderPass;
+import static org.lwjgl.vulkan.VK10.vkCmdBindDescriptorSets;
+import static org.lwjgl.vulkan.VK10.vkCmdBindPipeline;
+import static org.lwjgl.vulkan.VK10.vkCmdBlitImage;
+import static org.lwjgl.vulkan.VK10.vkCmdEndRenderPass;
+import static org.lwjgl.vulkan.VK10.vkCmdPipelineBarrier;
+import static org.lwjgl.vulkan.VK10.vkCmdSetScissor;
+import static org.lwjgl.vulkan.VK10.vkCmdSetViewport;
+import static org.lwjgl.vulkan.VK10.vkCreateBuffer;
+import static org.lwjgl.vulkan.VK10.vkCreateCommandPool;
+import static org.lwjgl.vulkan.VK10.vkCreateDescriptorPool;
+import static org.lwjgl.vulkan.VK10.vkCreateDescriptorSetLayout;
+import static org.lwjgl.vulkan.VK10.vkCreateFence;
+import static org.lwjgl.vulkan.VK10.vkCreateFramebuffer;
+import static org.lwjgl.vulkan.VK10.vkCreateGraphicsPipelines;
+import static org.lwjgl.vulkan.VK10.vkCreateImage;
+import static org.lwjgl.vulkan.VK10.vkCreateImageView;
+import static org.lwjgl.vulkan.VK10.vkCreatePipelineLayout;
+import static org.lwjgl.vulkan.VK10.vkCreateRenderPass;
+import static org.lwjgl.vulkan.VK10.vkCreateSampler;
+import static org.lwjgl.vulkan.VK10.vkCreateSemaphore;
+import static org.lwjgl.vulkan.VK10.vkCreateShaderModule;
+import static org.lwjgl.vulkan.VK10.vkDestroyBuffer;
+import static org.lwjgl.vulkan.VK10.vkDestroyCommandPool;
+import static org.lwjgl.vulkan.VK10.vkDestroyDescriptorPool;
+import static org.lwjgl.vulkan.VK10.vkDestroyDescriptorSetLayout;
+import static org.lwjgl.vulkan.VK10.vkDestroyFence;
+import static org.lwjgl.vulkan.VK10.vkDestroyFramebuffer;
+import static org.lwjgl.vulkan.VK10.vkDestroyImage;
+import static org.lwjgl.vulkan.VK10.vkDestroyImageView;
+import static org.lwjgl.vulkan.VK10.vkDestroyPipeline;
+import static org.lwjgl.vulkan.VK10.vkDestroyPipelineLayout;
+import static org.lwjgl.vulkan.VK10.vkDestroyRenderPass;
+import static org.lwjgl.vulkan.VK10.vkDestroySampler;
+import static org.lwjgl.vulkan.VK10.vkDestroySemaphore;
+import static org.lwjgl.vulkan.VK10.vkDestroyShaderModule;
+import static org.lwjgl.vulkan.VK10.vkEndCommandBuffer;
+import static org.lwjgl.vulkan.VK10.vkFreeMemory;
+import static org.lwjgl.vulkan.VK10.vkGetBufferMemoryRequirements;
+import static org.lwjgl.vulkan.VK10.vkGetImageMemoryRequirements;
+import static org.lwjgl.vulkan.VK10.vkMapMemory;
+import static org.lwjgl.vulkan.VK10.vkQueueSubmit;
+import static org.lwjgl.vulkan.VK10.vkResetCommandBuffer;
+import static org.lwjgl.vulkan.VK10.vkResetCommandPool;
+import static org.lwjgl.vulkan.VK10.vkResetFences;
+import static org.lwjgl.vulkan.VK10.vkUnmapMemory;
+import static org.lwjgl.vulkan.VK10.vkUpdateDescriptorSets;
+import static org.lwjgl.vulkan.VK10.vkWaitForFences;
+
+import java.nio.ByteBuffer;
+import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
+import java.nio.LongBuffer;
+import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Set;
+import opencraft.graphics.Display;
+import opencraft.graphics.GameWindow;
+import opencraft.graphics.VulkanContext;
+import opencraft.graphics.VulkanSwapchain;
+import opencraft.player.Player;
+import opencraft.world.World;
+import opencraft.world.chunk.Chunk;
+import opencraft.world.chunk.ChunkPos;
+import org.joml.Matrix4f;
+import org.joml.Vector3f;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.PointerBuffer;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.VkBufferCreateInfo;
+import org.lwjgl.vulkan.VkClearValue;
+import org.lwjgl.vulkan.VkCommandBuffer;
+import org.lwjgl.vulkan.VkCommandBufferAllocateInfo;
+import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
+import org.lwjgl.vulkan.VkCommandPoolCreateInfo;
+import org.lwjgl.vulkan.VkDevice;
+import org.lwjgl.vulkan.VkFenceCreateInfo;
+import org.lwjgl.vulkan.VkFramebufferCreateInfo;
+import org.lwjgl.vulkan.VkGraphicsPipelineCreateInfo;
+import org.lwjgl.vulkan.VkImageCreateInfo;
+import org.lwjgl.vulkan.VkImageMemoryBarrier;
+import org.lwjgl.vulkan.VkImageViewCreateInfo;
+import org.lwjgl.vulkan.VkMemoryAllocateInfo;
+import org.lwjgl.vulkan.VkMemoryRequirements;
+import org.lwjgl.vulkan.VkRect2D;
+import org.lwjgl.vulkan.VkRenderPassBeginInfo;
+import org.lwjgl.vulkan.VkRenderPassCreateInfo;
+import org.lwjgl.vulkan.VkSubmitInfo;
+import org.lwjgl.vulkan.VkViewport;
+import org.lwjgl.vulkan.VkWriteDescriptorSet;
+
+/** Renders loaded chunk meshes offscreen, then presents via the shared BGRA presenter. */
+public final class WorldRenderer implements AutoCloseable {
+
+  private static final int MAX_FRAMES_IN_FLIGHT = 2;
+  private static final int UNIFORM_BUFFER_SIZE = 256;
+  private static final int VERTEX_STRIDE = 32;
+  private static final int COLOR_FORMAT = VK_FORMAT_B8G8R8A8_UNORM;
+  /** Chunks per side of a merged GPU region mesh (4×4 = 16 chunks / draw). */
+  private static final int MESH_REGION = 4;
+
+  private final GameWindow window;
+  private final VulkanContext vulkan;
+  private final VulkanSwapchain swapchain;
+  private final Display display;
+
+  private World world;
+  private TextureAtlas atlas;
+  private final Map<ChunkPos, ChunkMesher.MeshData> chunkMeshes = new HashMap<>();
+  private final Map<Long, GpuRegionMesh> regionMeshes = new HashMap<>();
+  private final Set<Long> dirtyRegions = new HashSet<>();
+  private final java.util.ArrayList<GpuRegionMesh> pendingMeshFree = new java.util.ArrayList<>();
+  private ChunkMeshScheduler meshScheduler;
+
+  private ByteBuffer hudPixels;
+  private int hudWidth;
+  private int hudHeight;
+  private int hudRowBytes;
+  private long hudStagingBuffer;
+  private long hudStagingMemory;
+  private ByteBuffer hudStagingMapped;
+  private long hudStagingCapacity;
+
+  private long renderPass;
+  private long pipelineLayout;
+  private long graphicsPipeline;
+  private long translucentPipeline;
+  private long descriptorSetLayout;
+  private long descriptorPool;
+  private long[] descriptorSets = new long[0];
+
+  private long colorImage;
+  private long colorImageMemory;
+  private long colorImageView;
+  private long depthImage;
+  private long depthImageMemory;
+  private long depthImageView;
+  private long framebuffer;
+  private int targetWidth;
+  private int targetHeight;
+
+  private long readbackBuffer;
+  private long readbackMemory;
+  private ByteBuffer readbackMapped;
+
+  private long textureImage;
+  private long textureImageMemory;
+  private long textureImageView;
+  private long textureSampler;
+
+  private long[] uniformBuffers = new long[0];
+  private long[] uniformBuffersMemory = new long[0];
+  private ByteBuffer[] uniformBuffersMapped = new ByteBuffer[0];
+
+  private long commandPool;
+  private VkCommandBuffer[] commandBuffers = new VkCommandBuffer[0];
+  private long[] imageAvailableSemaphores = new long[0];
+  private long[] renderFinishedSemaphores = new long[0];
+  private long[] inFlightFences = new long[0];
+  private int currentFrame;
+  private boolean loggedFirstPresent;
+  private final ChunkFrustum chunkFrustum = new ChunkFrustum();
+  private final Matrix4f projViewScratch = new Matrix4f();
+  private int activeRenderDistance = 4;
+
+  /**
+   * Creates a renderer that draws offscreen and presents through {@link Display#presentBGRA}.
+   *
+   * @param window GLFW window
+   * @param vulkan Vulkan device context
+   * @param swapchain shared swapchain (size reference only)
+   * @param display display used for BGRA present
+   */
+  public WorldRenderer(
+      GameWindow window, VulkanContext vulkan, VulkanSwapchain swapchain, Display display) {
+    this.window = window;
+    this.vulkan = vulkan;
+    this.swapchain = swapchain;
+    this.display = display;
+  }
+
+  /**
+   * Creates a renderer bound to the shared window swapchain.
+   *
+   * @param window GLFW window
+   * @param vulkan Vulkan device context
+   * @param swapchain shared swapchain
+   * @deprecated use {@link #WorldRenderer(GameWindow, VulkanContext, VulkanSwapchain, Display)}
+   */
+  @Deprecated
+  public WorldRenderer(GameWindow window, VulkanContext vulkan, VulkanSwapchain swapchain) {
+    this(window, vulkan, swapchain, null);
+  }
+
+  /** Compiles shaders, creates pipelines, depth buffer, framebuffers, and sync objects. */
+  public void init() {
+    init(TextureAtlas.createFromBlocks());
+  }
+
+  /**
+   * Initializes GPU resources using a prebuilt texture atlas.
+   *
+   * @param atlas block texture atlas
+   */
+  public void init(TextureAtlas atlas) {
+    this.atlas = atlas;
+    if (meshScheduler != null) {
+      meshScheduler.close();
+    }
+    meshScheduler =
+        new ChunkMeshScheduler(Math.max(2, Runtime.getRuntime().availableProcessors() - 1));
+    createCommandPool();
+    createRenderPass();
+    createDescriptorSetLayout();
+    createGraphicsPipeline();
+    createOffscreenTargets();
+    createTextureResources();
+    createUniformBuffers();
+    createDescriptorPool();
+    createDescriptorSets();
+    createCommandBuffers();
+    createSyncObjects();
+  }
+
+  /**
+   * Sets the active world to render.
+   *
+   * @param world voxel world
+   */
+  public void setWorld(World world) {
+    this.world = world;
+    clearMeshes();
+    if (meshScheduler != null) {
+      meshScheduler.close();
+    }
+    meshScheduler =
+        new ChunkMeshScheduler(Math.max(2, Runtime.getRuntime().availableProcessors() - 1));
+  }
+
+  /**
+   * Returns how many chunk meshes are currently resident on the GPU.
+   *
+   * @return mesh count
+   */
+  public int getMeshCount() {
+    return chunkMeshes.size();
+  }
+
+  /**
+   * Sets the Ultralight HUD bitmap to stamp into the top-left corner this frame.
+   *
+   * @param pixels BGRA pixels (may be null to skip)
+   * @param width HUD width
+   * @param height HUD height
+   * @param rowBytes row stride in bytes
+   */
+  public void setHudOverlay(ByteBuffer pixels, int width, int height, int rowBytes) {
+    this.hudPixels = pixels;
+    this.hudWidth = width;
+    this.hudHeight = height;
+    this.hudRowBytes = rowBytes;
+  }
+
+  /**
+   * Loads nearby chunks and uploads meshes for new or dirty chunks.
+   *
+   * @param player viewer
+   * @param renderDistance chunk Chebyshev radius
+   */
+  public void syncChunks(Player player, int renderDistance) {
+    if (world == null || atlas == null || meshScheduler == null) {
+      return;
+    }
+    this.activeRenderDistance = Math.max(1, renderDistance);
+    flushPendingMeshFrees();
+    int pcx = Math.floorDiv((int) Math.floor(player.getX()), Chunk.SIZE_X);
+    int pcz = Math.floorDiv((int) Math.floor(player.getZ()), Chunk.SIZE_Z);
+    float aspect = targetWidth / (float) Math.max(1, targetHeight);
+    if (targetWidth <= 0) {
+      aspect = window.getWidth() / (float) Math.max(1, window.getHeight());
+    }
+    ChunkFrustum.buildProjView(player, aspect, projViewScratch);
+    chunkFrustum.update(projViewScratch);
+
+    // Pull finished background builds onto the CPU mesh map and mark regions dirty.
+    for (ChunkMeshScheduler.Completed done : meshScheduler.drain(24)) {
+      chunkMeshes.put(done.pos(), done.data());
+      dirtyRegions.add(regionKey(done.pos()));
+      if (chunkMeshes.size() <= 3) {
+        System.out.println(
+            "[Opencraft] mesh ready "
+                + done.pos()
+                + " o="
+                + done.data().opaqueIndices().length
+                + " t="
+                + done.data().translucentIndices().length);
+      }
+    }
+
+    int submits = 0;
+    final int maxSubmitsPerFrame = 24;
+    outer:
+    for (int radius = 0; radius <= renderDistance; radius++) {
+      for (int cx = pcx - radius; cx <= pcx + radius; cx++) {
+        for (int cz = pcz - radius; cz <= pcz + radius; cz++) {
+          int dist = Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz));
+          if (dist != radius) {
+            continue;
+          }
+          ChunkPos pos = new ChunkPos(cx, cz);
+          if (dist > 1 && !chunkFrustum.testChunk(pos)) {
+            continue;
+          }
+          ChunkMesher.MeshData existing = chunkMeshes.get(pos);
+          Chunk loaded = world.getLoadedChunk(pos);
+          boolean needsBuild =
+              existing == null || (loaded != null && loaded.isDirty());
+          if (!needsBuild) {
+            continue;
+          }
+          if (submits >= maxSubmitsPerFrame) {
+            break outer;
+          }
+          if (meshScheduler.submit(world, pos, atlas)) {
+            submits++;
+          }
+        }
+      }
+    }
+
+    // Drop far CPU meshes and mark their regions dirty.
+    Iterator<Map.Entry<ChunkPos, ChunkMesher.MeshData>> it = chunkMeshes.entrySet().iterator();
+    while (it.hasNext()) {
+      Map.Entry<ChunkPos, ChunkMesher.MeshData> entry = it.next();
+      ChunkPos pos = entry.getKey();
+      int dist = Math.max(Math.abs(pos.x() - pcx), Math.abs(pos.z() - pcz));
+      if (dist > renderDistance) {
+        dirtyRegions.add(regionKey(pos));
+        it.remove();
+      }
+    }
+
+    // Rebuild a few dirty merged region GPU buffers per frame.
+    int rebuilds = 0;
+    final int maxRebuilds = 6;
+    Iterator<Long> dirtyIt = dirtyRegions.iterator();
+    while (dirtyIt.hasNext() && rebuilds < maxRebuilds) {
+      long key = dirtyIt.next();
+      dirtyIt.remove();
+      rebuildRegion(key);
+      rebuilds++;
+    }
+  }
+
+  private void rebuildRegion(long key) {
+    int rx = (int) (key >> 32);
+    int rz = (int) key;
+    int x0 = rx * MESH_REGION;
+    int z0 = rz * MESH_REGION;
+    java.util.ArrayList<ChunkMesher.MeshData> parts = new java.util.ArrayList<>(MESH_REGION * MESH_REGION);
+    boolean any = false;
+    for (int cz = z0; cz < z0 + MESH_REGION; cz++) {
+      for (int cx = x0; cx < x0 + MESH_REGION; cx++) {
+        ChunkMesher.MeshData data = chunkMeshes.get(new ChunkPos(cx, cz));
+        if (data != null && !data.isEmpty()) {
+          parts.add(data);
+          any = true;
+        }
+      }
+    }
+    GpuRegionMesh old = regionMeshes.remove(key);
+    if (old != null) {
+      pendingMeshFree.add(old);
+    }
+    if (!any) {
+      return;
+    }
+    regionMeshes.put(key, GpuRegionMesh.upload(vulkan, parts));
+  }
+
+  private static long regionKey(ChunkPos pos) {
+    int rx = Math.floorDiv(pos.x(), MESH_REGION);
+    int rz = Math.floorDiv(pos.z(), MESH_REGION);
+    return (((long) rx) << 32) ^ (rz & 0xffffffffL);
+  }
+
+  /** Tests whether any chunk column in this mesh region may be visible. */
+  private boolean regionInFrustum(long key) {
+    int rx = (int) (key >> 32);
+    int rz = (int) key;
+    int x0 = rx * MESH_REGION;
+    int z0 = rz * MESH_REGION;
+    for (int cz = z0; cz < z0 + MESH_REGION; cz++) {
+      for (int cx = x0; cx < x0 + MESH_REGION; cx++) {
+        if (chunkFrustum.testChunk(new ChunkPos(cx, cz))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private void flushPendingMeshFrees() {
+    if (pendingMeshFree.isEmpty()) {
+      return;
+    }
+    vulkan.waitIdle();
+    for (GpuRegionMesh mesh : pendingMeshFree) {
+      mesh.free(vulkan);
+    }
+    pendingMeshFree.clear();
+  }
+
+  /**
+   * Renders the world offscreen, blits to the swapchain on the GPU, and presents.
+   *
+   * @param player camera and movement source
+   */
+  public void render(Player player) {
+    int width = Math.max(1, window.getWidth());
+    int height = Math.max(1, window.getHeight());
+    if (width != targetWidth || height != targetHeight || window.wasFramebufferResized()) {
+      recreateSwapchainResources();
+      window.clearFramebufferResized();
+    }
+
+    VkDevice device = vulkan.getDevice();
+    try (MemoryStack stack = stackPush()) {
+      vkWaitForFences(device, inFlightFences[currentFrame], true, -1L);
+
+      IntBuffer imageIndex = stack.ints(0);
+      int acquire =
+          vkAcquireNextImageKHR(
+              device,
+              swapchain.getSwapchain(),
+              -1L,
+              imageAvailableSemaphores[currentFrame],
+              VK_NULL_HANDLE,
+              imageIndex);
+      if (acquire == VK_ERROR_OUT_OF_DATE_KHR) {
+        recreateSwapchainResources();
+        window.clearFramebufferResized();
+        return;
+      }
+      if (acquire != VK_SUCCESS && acquire != VK_SUBOPTIMAL_KHR) {
+        throw new IllegalStateException("Failed to acquire swapchain image: " + acquire);
+      }
+      int swapIndex = imageIndex.get(0);
+      long swapImage = swapchain.getImages()[swapIndex];
+
+      vkResetFences(device, inFlightFences[currentFrame]);
+      updateUniformBuffer(player, currentFrame);
+
+      VkCommandBuffer cmd = commandBuffers[currentFrame];
+      vkResetCommandBuffer(cmd, 0);
+      VkCommandBufferBeginInfo beginInfo =
+          VkCommandBufferBeginInfo.calloc(stack)
+              .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
+              .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+      VulkanContext.checkVk(vkBeginCommandBuffer(cmd, beginInfo), "begin world cmd");
+
+      VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
+      viewport.get(0).x(0).y(0).width(targetWidth).height(targetHeight).minDepth(0f).maxDepth(1f);
+      viewport.position(0);
+      vkCmdSetViewport(cmd, 0, viewport);
+
+      VkRect2D.Buffer scissor = VkRect2D.calloc(1, stack);
+      scissor.get(0).offset().set(0, 0);
+      scissor.get(0).extent().set(targetWidth, targetHeight);
+      scissor.position(0);
+      vkCmdSetScissor(cmd, 0, scissor);
+
+      boolean underwater = player.isEyeInWater();
+      float fogR = underwater ? 0.04f : 0.53f;
+      float fogG = underwater ? 0.18f : 0.81f;
+      float fogB = underwater ? 0.32f : 0.92f;
+      VkClearValue.Buffer clearValues = VkClearValue.calloc(2, stack);
+      clearValues
+          .get(0)
+          .color()
+          .float32(0, fogR)
+          .float32(1, fogG)
+          .float32(2, fogB)
+          .float32(3, 1f);
+      clearValues.get(1).depthStencil().depth(1f).stencil(0);
+      clearValues.position(0);
+
+      VkRenderPassBeginInfo renderPassInfo =
+          VkRenderPassBeginInfo.calloc(stack)
+              .sType(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO)
+              .renderPass(renderPass)
+              .framebuffer(framebuffer)
+              .clearValueCount(2)
+              .pClearValues(clearValues);
+      renderPassInfo.renderArea().offset().set(0, 0);
+      renderPassInfo.renderArea().extent().set(targetWidth, targetHeight);
+
+      vkCmdBeginRenderPass(cmd, renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+      vkCmdBindDescriptorSets(
+          cmd,
+          VK_PIPELINE_BIND_POINT_GRAPHICS,
+          pipelineLayout,
+          0,
+          stack.longs(descriptorSets[currentFrame]),
+          null);
+
+      int drawn = 0;
+      float aspect = targetWidth / (float) Math.max(1, targetHeight);
+      ChunkFrustum.buildProjView(player, aspect, projViewScratch);
+      chunkFrustum.update(projViewScratch);
+
+      // Pass 1: opaque terrain — one draw per merged 4×4 chunk region.
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+      for (Map.Entry<Long, GpuRegionMesh> entry : regionMeshes.entrySet()) {
+        GpuRegionMesh mesh = entry.getValue();
+        if (mesh.isEmpty() || !regionInFrustum(entry.getKey())) {
+          continue;
+        }
+        mesh.drawOpaque(cmd);
+        drawn++;
+      }
+
+      // Pass 2: water blended over solid depth (no depth write).
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, translucentPipeline);
+      for (Map.Entry<Long, GpuRegionMesh> entry : regionMeshes.entrySet()) {
+        GpuRegionMesh mesh = entry.getValue();
+        if (!mesh.hasTranslucent() || !regionInFrustum(entry.getKey())) {
+          continue;
+        }
+        mesh.drawTranslucent(cmd);
+      }
+      vkCmdEndRenderPass(cmd);
+
+      // Stamp Ultralight FPS HUD into the top-left of the offscreen color target.
+      if (hudPixels != null && hudWidth > 0 && hudHeight > 0) {
+        ensureHudStaging(hudRowBytes * hudHeight);
+        hudStagingMapped.clear();
+        int oldLim = hudPixels.limit();
+        int oldPos = hudPixels.position();
+        hudPixels.limit(oldPos + hudRowBytes * hudHeight);
+        hudStagingMapped.put(hudPixels);
+        hudPixels.position(oldPos).limit(oldLim);
+        hudStagingMapped.flip();
+
+        VkImageMemoryBarrier.Buffer toDst = VkImageMemoryBarrier.calloc(1, stack);
+        toDst
+            .get(0)
+            .srcAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
+            .dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
+            .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+            .newLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+            .image(colorImage)
+            .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+        toDst
+            .get(0)
+            .subresourceRange()
+            .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+            .baseMipLevel(0)
+            .levelCount(1)
+            .baseArrayLayer(0)
+            .layerCount(1);
+        toDst.position(0);
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            null,
+            null,
+            toDst);
+
+        org.lwjgl.vulkan.VkBufferImageCopy.Buffer region =
+            org.lwjgl.vulkan.VkBufferImageCopy.calloc(1, stack);
+        int copyW = Math.min(hudWidth, targetWidth - 12);
+        int copyH = Math.min(hudHeight, targetHeight - 12);
+        region
+            .get(0)
+            .bufferOffset(0)
+            .bufferRowLength(hudRowBytes / 4)
+            .bufferImageHeight(hudHeight)
+            .imageSubresource()
+            .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+            .mipLevel(0)
+            .baseArrayLayer(0)
+            .layerCount(1);
+        region.get(0).imageOffset().set(12, 12, 0);
+        region.get(0).imageExtent().set(Math.max(1, copyW), Math.max(1, copyH), 1);
+        region.position(0);
+        org.lwjgl.vulkan.VK10.vkCmdCopyBufferToImage(
+            cmd,
+            hudStagingBuffer,
+            colorImage,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            region);
+
+        VkImageMemoryBarrier.Buffer toSrc = VkImageMemoryBarrier.calloc(1, stack);
+        toSrc
+            .get(0)
+            .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
+            .dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT)
+            .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+            .newLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+            .image(colorImage)
+            .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+        toSrc
+            .get(0)
+            .subresourceRange()
+            .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+            .baseMipLevel(0)
+            .levelCount(1)
+            .baseArrayLayer(0)
+            .layerCount(1);
+        toSrc.position(0);
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            null,
+            null,
+            toSrc);
+      }
+
+      VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(2, stack);
+      barrier
+          .get(0)
+          .srcAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
+          .dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT)
+          .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+          .newLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+          .image(colorImage)
+          .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+          .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+      barrier
+          .get(0)
+          .subresourceRange()
+          .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+          .baseMipLevel(0)
+          .levelCount(1)
+          .baseArrayLayer(0)
+          .layerCount(1);
+      barrier
+          .get(1)
+          .srcAccessMask(0)
+          .dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
+          .oldLayout(VK_IMAGE_LAYOUT_UNDEFINED)
+          .newLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+          .image(swapImage)
+          .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+          .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+      barrier
+          .get(1)
+          .subresourceRange()
+          .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+          .baseMipLevel(0)
+          .levelCount(1)
+          .baseArrayLayer(0)
+          .layerCount(1);
+      barrier.position(0);
+      vkCmdPipelineBarrier(
+          cmd,
+          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+          VK_PIPELINE_STAGE_TRANSFER_BIT,
+          0,
+          null,
+          null,
+          barrier);
+
+      int copyW = Math.min(targetWidth, swapchain.getExtent().width());
+      int copyH = Math.min(targetHeight, swapchain.getExtent().height());
+      org.lwjgl.vulkan.VkImageBlit.Buffer blit = org.lwjgl.vulkan.VkImageBlit.calloc(1, stack);
+      blit.get(0).srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+      blit.get(0).dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+      blit.get(0).srcOffsets(0).set(0, 0, 0);
+      blit.get(0).srcOffsets(1).set(copyW, copyH, 1);
+      blit.get(0).dstOffsets(0).set(0, 0, 0);
+      blit.get(0).dstOffsets(1).set(copyW, copyH, 1);
+      blit.position(0);
+      vkCmdBlitImage(
+          cmd,
+          colorImage,
+          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+          swapImage,
+          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+          blit,
+          VK_FILTER_NEAREST);
+
+      VkImageMemoryBarrier.Buffer toPresent = VkImageMemoryBarrier.calloc(1, stack);
+      toPresent
+          .get(0)
+          .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
+          .dstAccessMask(0)
+          .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+          .newLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+          .image(swapImage)
+          .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+          .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+      toPresent
+          .get(0)
+          .subresourceRange()
+          .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+          .baseMipLevel(0)
+          .levelCount(1)
+          .baseArrayLayer(0)
+          .layerCount(1);
+      toPresent.position(0);
+      vkCmdPipelineBarrier(
+          cmd,
+          VK_PIPELINE_STAGE_TRANSFER_BIT,
+          VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+          0,
+          null,
+          null,
+          toPresent);
+
+      VulkanContext.checkVk(vkEndCommandBuffer(cmd), "end world cmd");
+
+      VkSubmitInfo submitInfo =
+          VkSubmitInfo.calloc(stack)
+              .sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
+              .waitSemaphoreCount(1)
+              .pWaitSemaphores(stack.longs(imageAvailableSemaphores[currentFrame]))
+              .pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_TRANSFER_BIT))
+              .pCommandBuffers(stack.pointers(cmd.address()))
+              .pSignalSemaphores(stack.longs(renderFinishedSemaphores[currentFrame]));
+      VulkanContext.checkVk(
+          vkQueueSubmit(vulkan.getGraphicsQueue(), submitInfo, inFlightFences[currentFrame]),
+          "submit world render");
+
+      org.lwjgl.vulkan.VkPresentInfoKHR presentInfo =
+          org.lwjgl.vulkan.VkPresentInfoKHR.calloc(stack)
+              .sType(VK_STRUCTURE_TYPE_PRESENT_INFO_KHR)
+              .pWaitSemaphores(stack.longs(renderFinishedSemaphores[currentFrame]))
+              .swapchainCount(1)
+              .pSwapchains(stack.longs(swapchain.getSwapchain()))
+              .pImageIndices(stack.ints(swapIndex));
+      int present = vkQueuePresentKHR(vulkan.getPresentQueue(), presentInfo);
+      if (present == VK_ERROR_OUT_OF_DATE_KHR
+          || present == VK_SUBOPTIMAL_KHR
+          || window.wasFramebufferResized()) {
+        window.clearFramebufferResized();
+        recreateSwapchainResources();
+      } else if (present != VK_SUCCESS) {
+        throw new IllegalStateException("Failed to present: " + present);
+      }
+
+      currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+      if (!loggedFirstPresent) {
+        loggedFirstPresent = true;
+        System.out.println(
+            "[Opencraft] world present ok drawn="
+                + drawn
+                + "/"
+                + chunkMeshes.size()
+                + " regions="
+                + regionMeshes.size()
+                + " extent="
+                + targetWidth
+                + "x"
+                + targetHeight);
+      }
+    }
+  }
+
+  /**
+   * Copies the last rendered swapchain image to a PNG file (best effort).
+   *
+   * @param path output path
+   */
+  public void captureScreenshot(Path path) {
+    if (readbackMapped == null || targetWidth <= 0 || targetHeight <= 0) {
+      return;
+    }
+    try {
+      ByteBuffer src = readbackMapped.duplicate().clear();
+      ByteBuffer copy = BufferUtils.createByteBuffer(targetWidth * targetHeight * 4);
+      copy.put(src).flip();
+      stbi_write_png(path.toString(), targetWidth, targetHeight, 4, copy, targetWidth * 4);
+    } catch (RuntimeException e) {
+      System.err.println("Screenshot failed: " + e.getMessage());
+    }
+  }
+
+  /** Releases GPU resources and chunk meshes. */
+  @Override
+  public void close() {
+    vulkan.waitIdle();
+    clearMeshes();
+    if (meshScheduler != null) {
+      meshScheduler.close();
+      meshScheduler = null;
+    }
+    destroyHudStaging();
+    destroySyncObjects();
+    if (commandPool != VK_NULL_HANDLE) {
+      vkDestroyCommandPool(vulkan.getDevice(), commandPool, null);
+      commandPool = VK_NULL_HANDLE;
+    }
+    destroyUniformBuffers();
+    if (descriptorPool != VK_NULL_HANDLE) {
+      vkDestroyDescriptorPool(vulkan.getDevice(), descriptorPool, null);
+      descriptorPool = VK_NULL_HANDLE;
+    }
+    destroyTextureResources();
+    destroyOffscreenTargets();
+    if (translucentPipeline != VK_NULL_HANDLE) {
+      vkDestroyPipeline(vulkan.getDevice(), translucentPipeline, null);
+      translucentPipeline = VK_NULL_HANDLE;
+    }
+    if (graphicsPipeline != VK_NULL_HANDLE) {
+      vkDestroyPipeline(vulkan.getDevice(), graphicsPipeline, null);
+      graphicsPipeline = VK_NULL_HANDLE;
+    }
+    if (pipelineLayout != VK_NULL_HANDLE) {
+      vkDestroyPipelineLayout(vulkan.getDevice(), pipelineLayout, null);
+      pipelineLayout = VK_NULL_HANDLE;
+    }
+    if (renderPass != VK_NULL_HANDLE) {
+      vkDestroyRenderPass(vulkan.getDevice(), renderPass, null);
+      renderPass = VK_NULL_HANDLE;
+    }
+    if (descriptorSetLayout != VK_NULL_HANDLE) {
+      vkDestroyDescriptorSetLayout(vulkan.getDevice(), descriptorSetLayout, null);
+      descriptorSetLayout = VK_NULL_HANDLE;
+    }
+  }
+
+  /** Rebuilds offscreen color/depth targets after a window resize. */
+  public void recreateSwapchainResources() {
+    vulkan.waitIdle();
+    swapchain.recreate();
+    recreateOffscreenTargets();
+  }
+
+  private void recreateOffscreenTargets() {
+    vulkan.waitIdle();
+    destroyOffscreenTargets();
+    createOffscreenTargets();
+  }
+
+  private void clearMeshes() {
+    flushPendingMeshFrees();
+    for (GpuRegionMesh mesh : regionMeshes.values()) {
+      mesh.free(vulkan);
+    }
+    regionMeshes.clear();
+    chunkMeshes.clear();
+    dirtyRegions.clear();
+  }
+
+  private void ensureHudStaging(int bytes) {
+    if (hudStagingMapped != null && hudStagingCapacity >= bytes) {
+      return;
+    }
+    destroyHudStaging();
+    VkDevice device = vulkan.getDevice();
+    try (MemoryStack stack = stackPush()) {
+      hudStagingBuffer = createBuffer(device, stack, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+      hudStagingMemory =
+          allocateBufferMemory(
+              vulkan,
+              device,
+              stack,
+              hudStagingBuffer,
+              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+      PointerBuffer mapped = stack.mallocPointer(1);
+      vkMapMemory(device, hudStagingMemory, 0, bytes, 0, mapped);
+      hudStagingMapped = mapped.getByteBuffer(0, bytes);
+      hudStagingCapacity = bytes;
+    }
+  }
+
+  private void destroyHudStaging() {
+    VkDevice device = vulkan.getDevice();
+    if (hudStagingMapped != null) {
+      vkUnmapMemory(device, hudStagingMemory);
+      hudStagingMapped = null;
+    }
+    if (hudStagingBuffer != VK_NULL_HANDLE) {
+      vkDestroyBuffer(device, hudStagingBuffer, null);
+      hudStagingBuffer = VK_NULL_HANDLE;
+    }
+    if (hudStagingMemory != VK_NULL_HANDLE) {
+      vkFreeMemory(device, hudStagingMemory, null);
+      hudStagingMemory = VK_NULL_HANDLE;
+    }
+    hudStagingCapacity = 0;
+  }
+
+  private void updateUniformBuffer(Player player, int frame) {
+    Matrix4f mvp = buildMvp(player);
+    FloatBuffer buffer = uniformBuffersMapped[frame].asFloatBuffer();
+    buffer.position(0);
+    mvp.get(buffer);
+    double[] eye = player.getEyePosition();
+    boolean underwater = player.isEyeInWater();
+    float[] span = atlas != null ? atlas.tileUvSpan() : new float[] {1f, 1f};
+    // Fog ends just inside the loaded chunk radius so the horizon hides the world edge.
+    float fogEnd = activeRenderDistance * Chunk.SIZE_X * 0.92f;
+    float fogStart = fogEnd * 0.55f;
+    float fogR = underwater ? 0.04f : 0.53f;
+    float fogG = underwater ? 0.18f : 0.81f;
+    float fogB = underwater ? 0.32f : 0.92f;
+    // std140: mat4 @0, vec4 cameraPosUnderwater @64, fogParams @80, fogColor @96
+    buffer.put(16, (float) eye[0]);
+    buffer.put(17, (float) eye[1]);
+    buffer.put(18, (float) eye[2]);
+    buffer.put(19, underwater ? 1f : 0f);
+    buffer.put(20, fogStart);
+    buffer.put(21, fogEnd);
+    buffer.put(22, span[0]);
+    buffer.put(23, span[1]);
+    buffer.put(24, fogR);
+    buffer.put(25, fogG);
+    buffer.put(26, fogB);
+    buffer.put(27, 1f);
+  }
+
+  private Matrix4f buildMvp(Player player) {
+    float aspect = targetWidth / (float) Math.max(1, targetHeight);
+    Matrix4f proj =
+        new Matrix4f()
+            .perspective(
+                (float) Math.toRadians(70.0),
+                aspect,
+                0.05f,
+                Math.max(256f, activeRenderDistance * Chunk.SIZE_X * 1.5f))
+            .scale(1f, -1f, 1f);
+    double[] eyeArr = player.getEyePosition();
+    Vector3f eye = new Vector3f((float) eyeArr[0], (float) eyeArr[1], (float) eyeArr[2]);
+    double yawRad = Math.toRadians(player.getYaw());
+    double pitchRad = Math.toRadians(player.getPitch());
+    Vector3f center =
+        new Vector3f(
+            eye.x - (float) (Math.sin(yawRad) * Math.cos(pitchRad)),
+            eye.y - (float) Math.sin(pitchRad),
+            eye.z + (float) (Math.cos(yawRad) * Math.cos(pitchRad)));
+    Matrix4f view = new Matrix4f().lookAt(eye, center, new Vector3f(0, 1, 0));
+    return proj.mul(view);
+  }
+
+  private void createRenderPass() {
+    VkDevice device = vulkan.getDevice();
+    try (MemoryStack stack = stackPush()) {
+      org.lwjgl.vulkan.VkAttachmentDescription.Buffer attachments =
+          org.lwjgl.vulkan.VkAttachmentDescription.calloc(2, stack);
+      attachments
+          .get(0)
+          .format(COLOR_FORMAT)
+          .samples(VK_SAMPLE_COUNT_1_BIT)
+          .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
+          .storeOp(VK_ATTACHMENT_STORE_OP_STORE)
+          .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+          .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+          .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
+          .finalLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+      attachments
+          .get(1)
+          .format(VK_FORMAT_D32_SFLOAT)
+          .samples(VK_SAMPLE_COUNT_1_BIT)
+          .loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
+          .storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+          .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+          .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+          .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
+          .finalLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+      attachments.position(0);
+
+      org.lwjgl.vulkan.VkAttachmentReference.Buffer colorRef =
+          org.lwjgl.vulkan.VkAttachmentReference.calloc(1, stack);
+      colorRef.get(0).attachment(0).layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+      colorRef.position(0);
+      org.lwjgl.vulkan.VkAttachmentReference depthRef =
+          org.lwjgl.vulkan.VkAttachmentReference.calloc(stack)
+              .attachment(1)
+              .layout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+      org.lwjgl.vulkan.VkSubpassDescription.Buffer subpass =
+          org.lwjgl.vulkan.VkSubpassDescription.calloc(1, stack);
+      subpass
+          .get(0)
+          .pipelineBindPoint(VK_PIPELINE_BIND_POINT_GRAPHICS)
+          .colorAttachmentCount(1)
+          .pColorAttachments(colorRef)
+          .pDepthStencilAttachment(depthRef);
+      subpass.position(0);
+
+      org.lwjgl.vulkan.VkSubpassDependency.Buffer dependency =
+          org.lwjgl.vulkan.VkSubpassDependency.calloc(2, stack);
+      dependency
+          .get(0)
+          .srcSubpass(VK_SUBPASS_EXTERNAL)
+          .dstSubpass(0)
+          .srcStageMask(
+              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                  | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT)
+          .dstStageMask(
+              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                  | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT)
+          .srcAccessMask(0)
+          .dstAccessMask(
+              VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+      dependency
+          .get(1)
+          .srcSubpass(0)
+          .dstSubpass(VK_SUBPASS_EXTERNAL)
+          .srcStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
+          .dstStageMask(VK_PIPELINE_STAGE_TRANSFER_BIT)
+          .srcAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
+          .dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
+      dependency.position(0);
+
+      VkRenderPassCreateInfo renderPassInfo =
+          VkRenderPassCreateInfo.calloc(stack)
+              .pAttachments(attachments)
+              .pSubpasses(subpass)
+              .pDependencies(dependency);
+
+      LongBuffer pass = stack.mallocLong(1);
+      VulkanContext.checkVk(vkCreateRenderPass(device, renderPassInfo, null, pass), "render pass");
+      renderPass = pass.get(0);
+    }
+  }
+
+  private void createDescriptorSetLayout() {
+    try (MemoryStack stack = stackPush()) {
+      org.lwjgl.vulkan.VkDescriptorSetLayoutBinding.Buffer bindings =
+          org.lwjgl.vulkan.VkDescriptorSetLayoutBinding.calloc(2, stack);
+      bindings
+          .get(0)
+          .binding(0)
+          .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+          .descriptorCount(1)
+          .stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+      bindings
+          .get(1)
+          .binding(1)
+          .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+          .descriptorCount(1)
+          .stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+      bindings.position(0);
+
+      org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo layoutInfo =
+          org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo.calloc(stack).pBindings(bindings);
+      LongBuffer layout = stack.mallocLong(1);
+      VulkanContext.checkVk(
+          vkCreateDescriptorSetLayout(vulkan.getDevice(), layoutInfo, null, layout),
+          "descriptor set layout");
+      descriptorSetLayout = layout.get(0);
+    }
+  }
+
+  private void createGraphicsPipeline() {
+    VkDevice device = vulkan.getDevice();
+    long vertModule = createShaderModule("shaders/world.vert", shaderc_vertex_shader);
+    long fragModule = createShaderModule("shaders/world.frag", shaderc_fragment_shader);
+    try (MemoryStack stack = stackPush()) {
+      org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo.Buffer shaderStages =
+          org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo.calloc(2, stack);
+      shaderStages
+          .get(0)
+          .stage(VK_SHADER_STAGE_VERTEX_BIT)
+          .module(vertModule)
+          .pName(stack.UTF8("main"));
+      shaderStages
+          .get(1)
+          .stage(VK_SHADER_STAGE_FRAGMENT_BIT)
+          .module(fragModule)
+          .pName(stack.UTF8("main"));
+      shaderStages.position(0);
+
+      org.lwjgl.vulkan.VkVertexInputBindingDescription.Buffer binding =
+          org.lwjgl.vulkan.VkVertexInputBindingDescription.calloc(1, stack);
+      binding.get(0).binding(0).stride(VERTEX_STRIDE).inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
+      binding.position(0);
+
+      org.lwjgl.vulkan.VkVertexInputAttributeDescription.Buffer attrs =
+          org.lwjgl.vulkan.VkVertexInputAttributeDescription.calloc(4, stack);
+      attrs.get(0).binding(0).location(0).format(VK_FORMAT_R32G32B32_SFLOAT).offset(0);
+      attrs.get(1).binding(0).location(1).format(VK_FORMAT_R32G32_SFLOAT).offset(12);
+      attrs.get(2).binding(0).location(2).format(VK_FORMAT_R32_SFLOAT).offset(20);
+      attrs.get(3).binding(0).location(3).format(VK_FORMAT_R32G32_SFLOAT).offset(24);
+      attrs.position(0);
+
+      org.lwjgl.vulkan.VkPipelineVertexInputStateCreateInfo vertexInput =
+          org.lwjgl.vulkan.VkPipelineVertexInputStateCreateInfo.calloc(stack)
+              .pVertexBindingDescriptions(binding)
+              .pVertexAttributeDescriptions(attrs);
+
+      org.lwjgl.vulkan.VkPipelineInputAssemblyStateCreateInfo inputAssembly =
+          org.lwjgl.vulkan.VkPipelineInputAssemblyStateCreateInfo.calloc(stack)
+              .topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+
+      org.lwjgl.vulkan.VkPipelineViewportStateCreateInfo viewportState =
+          org.lwjgl.vulkan.VkPipelineViewportStateCreateInfo.calloc(stack)
+              .viewportCount(1)
+              .scissorCount(1);
+
+      org.lwjgl.vulkan.VkPipelineRasterizationStateCreateInfo rasterizer =
+          org.lwjgl.vulkan.VkPipelineRasterizationStateCreateInfo.calloc(stack)
+              .polygonMode(VK_POLYGON_MODE_FILL)
+              .cullMode(VK_CULL_MODE_BACK_BIT)
+              .frontFace(VK_FRONT_FACE_CLOCKWISE)
+              .lineWidth(1f);
+
+      org.lwjgl.vulkan.VkPipelineMultisampleStateCreateInfo multisampling =
+          org.lwjgl.vulkan.VkPipelineMultisampleStateCreateInfo.calloc(stack)
+              .rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
+
+      org.lwjgl.vulkan.VkPipelineDynamicStateCreateInfo dynamicState =
+          org.lwjgl.vulkan.VkPipelineDynamicStateCreateInfo.calloc(stack)
+              .pDynamicStates(stack.ints(VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR));
+
+      org.lwjgl.vulkan.VkPipelineLayoutCreateInfo pipelineLayoutInfo =
+          org.lwjgl.vulkan.VkPipelineLayoutCreateInfo.calloc(stack)
+              .pSetLayouts(stack.longs(descriptorSetLayout));
+      LongBuffer layout = stack.mallocLong(1);
+      VulkanContext.checkVk(
+          vkCreatePipelineLayout(device, pipelineLayoutInfo, null, layout), "pipeline layout");
+      pipelineLayout = layout.get(0);
+
+      // Opaque: depth write on, no blending (solid terrain).
+      org.lwjgl.vulkan.VkPipelineDepthStencilStateCreateInfo opaqueDepth =
+          org.lwjgl.vulkan.VkPipelineDepthStencilStateCreateInfo.calloc(stack)
+              .depthTestEnable(true)
+              .depthWriteEnable(true)
+              .depthCompareOp(VK_COMPARE_OP_LESS);
+      org.lwjgl.vulkan.VkPipelineColorBlendAttachmentState.Buffer opaqueBlendAtt =
+          org.lwjgl.vulkan.VkPipelineColorBlendAttachmentState.calloc(1, stack);
+      opaqueBlendAtt
+          .get(0)
+          .blendEnable(false)
+          .colorWriteMask(
+              VK_COLOR_COMPONENT_R_BIT
+                  | VK_COLOR_COMPONENT_G_BIT
+                  | VK_COLOR_COMPONENT_B_BIT
+                  | VK_COLOR_COMPONENT_A_BIT);
+      opaqueBlendAtt.position(0);
+      org.lwjgl.vulkan.VkPipelineColorBlendStateCreateInfo opaqueBlend =
+          org.lwjgl.vulkan.VkPipelineColorBlendStateCreateInfo.calloc(stack)
+              .pAttachments(opaqueBlendAtt);
+
+      VkGraphicsPipelineCreateInfo.Buffer opaqueInfo =
+          VkGraphicsPipelineCreateInfo.calloc(1, stack);
+      opaqueInfo
+          .get(0)
+          .pStages(shaderStages)
+          .pVertexInputState(vertexInput)
+          .pInputAssemblyState(inputAssembly)
+          .pViewportState(viewportState)
+          .pRasterizationState(rasterizer)
+          .pMultisampleState(multisampling)
+          .pDepthStencilState(opaqueDepth)
+          .pColorBlendState(opaqueBlend)
+          .pDynamicState(dynamicState)
+          .layout(pipelineLayout)
+          .renderPass(renderPass)
+          .subpass(0);
+      opaqueInfo.position(0);
+      LongBuffer opaquePipe = stack.mallocLong(1);
+      VulkanContext.checkVk(
+          vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, opaqueInfo, null, opaquePipe),
+          "opaque pipeline");
+      graphicsPipeline = opaquePipe.get(0);
+
+      // Translucent water: depth test on, depth write off, alpha blend.
+      org.lwjgl.vulkan.VkPipelineDepthStencilStateCreateInfo translucentDepth =
+          org.lwjgl.vulkan.VkPipelineDepthStencilStateCreateInfo.calloc(stack)
+              .depthTestEnable(true)
+              .depthWriteEnable(false)
+              .depthCompareOp(VK_COMPARE_OP_LESS);
+      org.lwjgl.vulkan.VkPipelineColorBlendAttachmentState.Buffer translucentBlendAtt =
+          org.lwjgl.vulkan.VkPipelineColorBlendAttachmentState.calloc(1, stack);
+      translucentBlendAtt
+          .get(0)
+          .blendEnable(true)
+          .srcColorBlendFactor(VK_BLEND_FACTOR_SRC_ALPHA)
+          .dstColorBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+          .colorBlendOp(VK_BLEND_OP_ADD)
+          .srcAlphaBlendFactor(VK_BLEND_FACTOR_ONE)
+          .dstAlphaBlendFactor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+          .alphaBlendOp(VK_BLEND_OP_ADD)
+          .colorWriteMask(
+              VK_COLOR_COMPONENT_R_BIT
+                  | VK_COLOR_COMPONENT_G_BIT
+                  | VK_COLOR_COMPONENT_B_BIT
+                  | VK_COLOR_COMPONENT_A_BIT);
+      translucentBlendAtt.position(0);
+      org.lwjgl.vulkan.VkPipelineColorBlendStateCreateInfo translucentBlend =
+          org.lwjgl.vulkan.VkPipelineColorBlendStateCreateInfo.calloc(stack)
+              .pAttachments(translucentBlendAtt);
+
+      VkGraphicsPipelineCreateInfo.Buffer translucentInfo =
+          VkGraphicsPipelineCreateInfo.calloc(1, stack);
+      translucentInfo
+          .get(0)
+          .pStages(shaderStages)
+          .pVertexInputState(vertexInput)
+          .pInputAssemblyState(inputAssembly)
+          .pViewportState(viewportState)
+          .pRasterizationState(rasterizer)
+          .pMultisampleState(multisampling)
+          .pDepthStencilState(translucentDepth)
+          .pColorBlendState(translucentBlend)
+          .pDynamicState(dynamicState)
+          .layout(pipelineLayout)
+          .renderPass(renderPass)
+          .subpass(0);
+      translucentInfo.position(0);
+      LongBuffer translucentPipe = stack.mallocLong(1);
+      VulkanContext.checkVk(
+          vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, translucentInfo, null, translucentPipe),
+          "translucent pipeline");
+      translucentPipeline = translucentPipe.get(0);
+    } finally {
+      vkDestroyShaderModule(device, vertModule, null);
+      vkDestroyShaderModule(device, fragModule, null);
+    }
+  }
+
+  private long createShaderModule(String path, int kind) {
+    ByteBuffer spirv = ShaderCompiler.compileGlsl(path, kind);
+    try (MemoryStack stack = stackPush()) {
+      org.lwjgl.vulkan.VkShaderModuleCreateInfo createInfo =
+          org.lwjgl.vulkan.VkShaderModuleCreateInfo.calloc(stack).pCode(spirv);
+      LongBuffer module = stack.mallocLong(1);
+      VulkanContext.checkVk(
+          vkCreateShaderModule(vulkan.getDevice(), createInfo, null, module), "shader module");
+      return module.get(0);
+    } finally {
+      memFree(spirv);
+    }
+  }
+
+  private void createOffscreenTargets() {
+    targetWidth = Math.max(1, window.getWidth());
+    targetHeight = Math.max(1, window.getHeight());
+    VkDevice device = vulkan.getDevice();
+    try (MemoryStack stack = stackPush()) {
+      VkImageCreateInfo colorInfo =
+          VkImageCreateInfo.calloc(stack)
+              .imageType(VK_IMAGE_TYPE_2D)
+              .format(COLOR_FORMAT)
+              .arrayLayers(1)
+              .samples(VK_SAMPLE_COUNT_1_BIT)
+              .tiling(VK_IMAGE_TILING_OPTIMAL)
+              .usage(
+                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                      | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                      | VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+              .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+      colorInfo.extent().set(targetWidth, targetHeight, 1);
+      colorInfo.mipLevels(1);
+      LongBuffer image = stack.mallocLong(1);
+      VulkanContext.checkVk(vkCreateImage(device, colorInfo, null, image), "color image");
+      colorImage = image.get(0);
+
+      VkMemoryRequirements colorReqs = VkMemoryRequirements.malloc(stack);
+      vkGetImageMemoryRequirements(device, colorImage, colorReqs);
+      VkMemoryAllocateInfo colorAlloc =
+          VkMemoryAllocateInfo.calloc(stack)
+              .allocationSize(colorReqs.size())
+              .memoryTypeIndex(
+                  vulkan.findMemoryType(
+                      colorReqs.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+      LongBuffer colorMem = stack.mallocLong(1);
+      VulkanContext.checkVk(vkAllocateMemory(device, colorAlloc, null, colorMem), "color memory");
+      colorImageMemory = colorMem.get(0);
+      org.lwjgl.vulkan.VK10.vkBindImageMemory(device, colorImage, colorImageMemory, 0);
+
+      VkImageViewCreateInfo colorViewInfo =
+          VkImageViewCreateInfo.calloc(stack)
+              .image(colorImage)
+              .viewType(VK_IMAGE_VIEW_TYPE_2D)
+              .format(COLOR_FORMAT);
+      colorViewInfo
+          .subresourceRange()
+          .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+          .baseMipLevel(0)
+          .levelCount(1)
+          .baseArrayLayer(0)
+          .layerCount(1);
+      LongBuffer colorView = stack.mallocLong(1);
+      VulkanContext.checkVk(
+          vkCreateImageView(device, colorViewInfo, null, colorView), "color view");
+      colorImageView = colorView.get(0);
+
+      VkImageCreateInfo depthInfo =
+          VkImageCreateInfo.calloc(stack)
+              .imageType(VK_IMAGE_TYPE_2D)
+              .format(VK_FORMAT_D32_SFLOAT)
+              .arrayLayers(1)
+              .samples(VK_SAMPLE_COUNT_1_BIT)
+              .tiling(VK_IMAGE_TILING_OPTIMAL)
+              .usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+              .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+      depthInfo.extent().set(targetWidth, targetHeight, 1);
+      depthInfo.mipLevels(1);
+      VulkanContext.checkVk(vkCreateImage(device, depthInfo, null, image), "depth image");
+      depthImage = image.get(0);
+
+      VkMemoryRequirements depthReqs = VkMemoryRequirements.malloc(stack);
+      vkGetImageMemoryRequirements(device, depthImage, depthReqs);
+      VkMemoryAllocateInfo depthAlloc =
+          VkMemoryAllocateInfo.calloc(stack)
+              .allocationSize(depthReqs.size())
+              .memoryTypeIndex(
+                  vulkan.findMemoryType(
+                      depthReqs.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+      LongBuffer depthMem = stack.mallocLong(1);
+      VulkanContext.checkVk(vkAllocateMemory(device, depthAlloc, null, depthMem), "depth memory");
+      depthImageMemory = depthMem.get(0);
+      org.lwjgl.vulkan.VK10.vkBindImageMemory(device, depthImage, depthImageMemory, 0);
+
+      VkImageViewCreateInfo depthViewInfo =
+          VkImageViewCreateInfo.calloc(stack)
+              .image(depthImage)
+              .viewType(VK_IMAGE_VIEW_TYPE_2D)
+              .format(VK_FORMAT_D32_SFLOAT);
+      depthViewInfo
+          .subresourceRange()
+          .aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT)
+          .baseMipLevel(0)
+          .levelCount(1)
+          .baseArrayLayer(0)
+          .layerCount(1);
+      LongBuffer depthView = stack.mallocLong(1);
+      VulkanContext.checkVk(
+          vkCreateImageView(device, depthViewInfo, null, depthView), "depth view");
+      depthImageView = depthView.get(0);
+
+      LongBuffer attachments = stack.mallocLong(2);
+      attachments.put(0, colorImageView).put(1, depthImageView);
+      VkFramebufferCreateInfo framebufferInfo =
+          VkFramebufferCreateInfo.calloc(stack)
+              .renderPass(renderPass)
+              .pAttachments(attachments)
+              .width(targetWidth)
+              .height(targetHeight)
+              .layers(1);
+      LongBuffer fb = stack.mallocLong(1);
+      VulkanContext.checkVk(vkCreateFramebuffer(device, framebufferInfo, null, fb), "framebuffer");
+      framebuffer = fb.get(0);
+
+      long bytes = (long) targetWidth * targetHeight * 4;
+      readbackBuffer = createBuffer(device, stack, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+      readbackMemory =
+          allocateBufferMemory(
+              vulkan,
+              device,
+              stack,
+              readbackBuffer,
+              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+      PointerBuffer mapped = stack.mallocPointer(1);
+      vkMapMemory(device, readbackMemory, 0, bytes, 0, mapped);
+      readbackMapped = mapped.getByteBuffer(0, (int) bytes);
+    }
+  }
+
+  private void destroyOffscreenTargets() {
+    VkDevice device = vulkan.getDevice();
+    if (readbackMapped != null) {
+      vkUnmapMemory(device, readbackMemory);
+      readbackMapped = null;
+    }
+    if (readbackBuffer != VK_NULL_HANDLE) {
+      vkDestroyBuffer(device, readbackBuffer, null);
+      readbackBuffer = VK_NULL_HANDLE;
+    }
+    if (readbackMemory != VK_NULL_HANDLE) {
+      vkFreeMemory(device, readbackMemory, null);
+      readbackMemory = VK_NULL_HANDLE;
+    }
+    if (framebuffer != VK_NULL_HANDLE) {
+      vkDestroyFramebuffer(device, framebuffer, null);
+      framebuffer = VK_NULL_HANDLE;
+    }
+    if (colorImageView != VK_NULL_HANDLE) {
+      vkDestroyImageView(device, colorImageView, null);
+      colorImageView = VK_NULL_HANDLE;
+    }
+    if (colorImage != VK_NULL_HANDLE) {
+      vkDestroyImage(device, colorImage, null);
+      colorImage = VK_NULL_HANDLE;
+    }
+    if (colorImageMemory != VK_NULL_HANDLE) {
+      vkFreeMemory(device, colorImageMemory, null);
+      colorImageMemory = VK_NULL_HANDLE;
+    }
+    if (depthImageView != VK_NULL_HANDLE) {
+      vkDestroyImageView(device, depthImageView, null);
+      depthImageView = VK_NULL_HANDLE;
+    }
+    if (depthImage != VK_NULL_HANDLE) {
+      vkDestroyImage(device, depthImage, null);
+      depthImage = VK_NULL_HANDLE;
+    }
+    if (depthImageMemory != VK_NULL_HANDLE) {
+      vkFreeMemory(device, depthImageMemory, null);
+      depthImageMemory = VK_NULL_HANDLE;
+    }
+    targetWidth = 0;
+    targetHeight = 0;
+  }
+
+  private void createTextureResources() {
+    int width = atlas.getWidth();
+    int height = atlas.getHeight();
+    VkDevice device = vulkan.getDevice();
+    long stagingBuffer = VK_NULL_HANDLE;
+    long stagingMemory = VK_NULL_HANDLE;
+    try (MemoryStack stack = stackPush()) {
+      long imageSize = (long) width * height * 4;
+      stagingBuffer = createBuffer(device, stack, imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+      stagingMemory =
+          allocateBufferMemory(
+              vulkan,
+              device,
+              stack,
+              stagingBuffer,
+              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+      PointerBuffer mapped = stack.mallocPointer(1);
+      vkMapMemory(device, stagingMemory, 0, imageSize, 0, mapped);
+      ByteBuffer pixels = atlas.getPixels().duplicate();
+      pixels.rewind();
+      mapped.getByteBuffer(0, (int) imageSize).put(pixels);
+      vkUnmapMemory(device, stagingMemory);
+
+      VkImageCreateInfo imageInfo =
+          VkImageCreateInfo.calloc(stack)
+              .imageType(VK_IMAGE_TYPE_2D)
+              .format(VK_FORMAT_R8G8B8A8_UNORM)
+              .arrayLayers(1)
+              .samples(VK_SAMPLE_COUNT_1_BIT)
+              .tiling(VK_IMAGE_TILING_OPTIMAL)
+              .usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
+              .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+      imageInfo.extent().set(width, height, 1);
+      imageInfo.mipLevels(1);
+      LongBuffer image = stack.mallocLong(1);
+      VulkanContext.checkVk(vkCreateImage(device, imageInfo, null, image), "texture image");
+      textureImage = image.get(0);
+
+      VkMemoryRequirements memRequirements = VkMemoryRequirements.malloc(stack);
+      vkGetImageMemoryRequirements(device, textureImage, memRequirements);
+      VkMemoryAllocateInfo allocInfo =
+          VkMemoryAllocateInfo.calloc(stack)
+              .allocationSize(memRequirements.size())
+              .memoryTypeIndex(
+                  vulkan.findMemoryType(
+                      memRequirements.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+      LongBuffer memory = stack.mallocLong(1);
+      VulkanContext.checkVk(vkAllocateMemory(device, allocInfo, null, memory), "texture memory");
+      textureImageMemory = memory.get(0);
+      org.lwjgl.vulkan.VK10.vkBindImageMemory(device, textureImage, textureImageMemory, 0);
+
+      transitionImageLayout(
+          textureImage,
+          VK_IMAGE_LAYOUT_UNDEFINED,
+          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+          VK_IMAGE_ASPECT_COLOR_BIT);
+      copyBufferToImage(stagingBuffer, textureImage, width, height);
+      transitionImageLayout(
+          textureImage,
+          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+          VK_IMAGE_ASPECT_COLOR_BIT);
+
+      VkImageViewCreateInfo viewInfo =
+          VkImageViewCreateInfo.calloc(stack)
+              .image(textureImage)
+              .viewType(VK_IMAGE_VIEW_TYPE_2D)
+              .format(VK_FORMAT_R8G8B8A8_UNORM);
+      viewInfo
+          .subresourceRange()
+          .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+          .baseMipLevel(0)
+          .levelCount(1)
+          .baseArrayLayer(0)
+          .layerCount(1);
+      LongBuffer view = stack.mallocLong(1);
+      VulkanContext.checkVk(vkCreateImageView(device, viewInfo, null, view), "texture view");
+      textureImageView = view.get(0);
+
+      org.lwjgl.vulkan.VkSamplerCreateInfo samplerInfo =
+          org.lwjgl.vulkan.VkSamplerCreateInfo.calloc(stack)
+              .magFilter(VK_FILTER_NEAREST)
+              .minFilter(VK_FILTER_NEAREST)
+              .addressModeU(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+              .addressModeV(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+              .addressModeW(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+              .mipmapMode(VK_SAMPLER_MIPMAP_MODE_NEAREST)
+              .maxAnisotropy(1f)
+              .borderColor(VK_BORDER_COLOR_INT_OPAQUE_BLACK);
+      LongBuffer sampler = stack.mallocLong(1);
+      VulkanContext.checkVk(vkCreateSampler(device, samplerInfo, null, sampler), "sampler");
+      textureSampler = sampler.get(0);
+    } finally {
+      if (stagingBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, stagingBuffer, null);
+      }
+      if (stagingMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, stagingMemory, null);
+      }
+    }
+  }
+
+  private void createUniformBuffers() {
+    uniformBuffers = new long[MAX_FRAMES_IN_FLIGHT];
+    uniformBuffersMemory = new long[MAX_FRAMES_IN_FLIGHT];
+    uniformBuffersMapped = new ByteBuffer[MAX_FRAMES_IN_FLIGHT];
+    VkDevice device = vulkan.getDevice();
+    try (MemoryStack stack = stackPush()) {
+      for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        uniformBuffers[i] =
+            createBuffer(device, stack, UNIFORM_BUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+        uniformBuffersMemory[i] =
+            allocateBufferMemory(
+                vulkan,
+                device,
+                stack,
+                uniformBuffers[i],
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        PointerBuffer mapped = stack.mallocPointer(1);
+        vkMapMemory(device, uniformBuffersMemory[i], 0, UNIFORM_BUFFER_SIZE, 0, mapped);
+        uniformBuffersMapped[i] = mapped.getByteBuffer(0, UNIFORM_BUFFER_SIZE);
+      }
+    }
+  }
+
+  private void createDescriptorPool() {
+    try (MemoryStack stack = stackPush()) {
+      org.lwjgl.vulkan.VkDescriptorPoolSize.Buffer poolSizes =
+          org.lwjgl.vulkan.VkDescriptorPoolSize.calloc(2, stack);
+      poolSizes
+          .get(0)
+          .type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+          .descriptorCount(MAX_FRAMES_IN_FLIGHT);
+      poolSizes
+          .get(1)
+          .type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+          .descriptorCount(MAX_FRAMES_IN_FLIGHT);
+      poolSizes.position(0);
+      org.lwjgl.vulkan.VkDescriptorPoolCreateInfo poolInfo =
+          org.lwjgl.vulkan.VkDescriptorPoolCreateInfo.calloc(stack)
+              .flags(VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT)
+              .maxSets(MAX_FRAMES_IN_FLIGHT)
+              .pPoolSizes(poolSizes);
+      LongBuffer pool = stack.mallocLong(1);
+      VulkanContext.checkVk(
+          vkCreateDescriptorPool(vulkan.getDevice(), poolInfo, null, pool), "descriptor pool");
+      descriptorPool = pool.get(0);
+    }
+  }
+
+  private void createDescriptorSets() {
+    descriptorSets = new long[MAX_FRAMES_IN_FLIGHT];
+    VkDevice device = vulkan.getDevice();
+    try (MemoryStack stack = stackPush()) {
+      LongBuffer layouts = stack.mallocLong(MAX_FRAMES_IN_FLIGHT);
+      for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        layouts.put(i, descriptorSetLayout);
+      }
+      layouts.rewind();
+      org.lwjgl.vulkan.VkDescriptorSetAllocateInfo allocInfo =
+          org.lwjgl.vulkan.VkDescriptorSetAllocateInfo.calloc(stack)
+              .descriptorPool(descriptorPool)
+              .pSetLayouts(layouts);
+      LongBuffer sets = stack.mallocLong(MAX_FRAMES_IN_FLIGHT);
+      VulkanContext.checkVk(vkAllocateDescriptorSets(device, allocInfo, sets), "descriptor sets");
+      for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        descriptorSets[i] = sets.get(i);
+        org.lwjgl.vulkan.VkDescriptorBufferInfo.Buffer bufferInfo =
+            org.lwjgl.vulkan.VkDescriptorBufferInfo.calloc(1, stack);
+        bufferInfo.get(0).buffer(uniformBuffers[i]).offset(0).range(UNIFORM_BUFFER_SIZE);
+        bufferInfo.position(0);
+        org.lwjgl.vulkan.VkDescriptorImageInfo.Buffer imageInfo =
+            org.lwjgl.vulkan.VkDescriptorImageInfo.calloc(1, stack);
+        imageInfo
+            .get(0)
+            .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            .imageView(textureImageView)
+            .sampler(textureSampler);
+        imageInfo.position(0);
+        VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(2, stack);
+        writes
+            .get(0)
+            .dstSet(descriptorSets[i])
+            .dstBinding(0)
+            .descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+            .descriptorCount(1)
+            .pBufferInfo(bufferInfo);
+        writes
+            .get(1)
+            .dstSet(descriptorSets[i])
+            .dstBinding(1)
+            .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+            .descriptorCount(1)
+            .pImageInfo(imageInfo);
+        writes.position(0);
+        vkUpdateDescriptorSets(device, writes, null);
+      }
+    }
+  }
+
+  private void createCommandPool() {
+    try (MemoryStack stack = stackPush()) {
+      VkCommandPoolCreateInfo poolInfo =
+          VkCommandPoolCreateInfo.calloc(stack)
+              .flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT)
+              .queueFamilyIndex(vulkan.getGraphicsQueueFamily());
+      LongBuffer pool = stack.mallocLong(1);
+      VulkanContext.checkVk(
+          vkCreateCommandPool(vulkan.getDevice(), poolInfo, null, pool), "command pool");
+      commandPool = pool.get(0);
+    }
+  }
+
+  private void createCommandBuffers() {
+    VkDevice device = vulkan.getDevice();
+    if (commandPool != VK_NULL_HANDLE) {
+      vkResetCommandPool(device, commandPool, 0);
+    }
+    commandBuffers = new VkCommandBuffer[MAX_FRAMES_IN_FLIGHT];
+    try (MemoryStack stack = stackPush()) {
+      VkCommandBufferAllocateInfo allocInfo =
+          VkCommandBufferAllocateInfo.calloc(stack)
+              .commandPool(commandPool)
+              .level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+              .commandBufferCount(MAX_FRAMES_IN_FLIGHT);
+      PointerBuffer buffers = stack.mallocPointer(MAX_FRAMES_IN_FLIGHT);
+      VulkanContext.checkVk(
+          vkAllocateCommandBuffers(device, allocInfo, buffers), "command buffers");
+      for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        commandBuffers[i] = new VkCommandBuffer(buffers.get(i), device);
+      }
+    }
+  }
+
+  private void createSyncObjects() {
+    imageAvailableSemaphores = new long[MAX_FRAMES_IN_FLIGHT];
+    renderFinishedSemaphores = new long[MAX_FRAMES_IN_FLIGHT];
+    inFlightFences = new long[MAX_FRAMES_IN_FLIGHT];
+    VkDevice device = vulkan.getDevice();
+    try (MemoryStack stack = stackPush()) {
+      org.lwjgl.vulkan.VkSemaphoreCreateInfo semaphoreInfo =
+          org.lwjgl.vulkan.VkSemaphoreCreateInfo.calloc(stack);
+      VkFenceCreateInfo fenceInfo =
+          VkFenceCreateInfo.calloc(stack).flags(VK_FENCE_CREATE_SIGNALED_BIT);
+      LongBuffer handle = stack.mallocLong(1);
+      for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VulkanContext.checkVk(
+            vkCreateSemaphore(device, semaphoreInfo, null, handle), "image semaphore");
+        imageAvailableSemaphores[i] = handle.get(0);
+        VulkanContext.checkVk(
+            vkCreateSemaphore(device, semaphoreInfo, null, handle), "render semaphore");
+        renderFinishedSemaphores[i] = handle.get(0);
+        VulkanContext.checkVk(vkCreateFence(device, fenceInfo, null, handle), "fence");
+        inFlightFences[i] = handle.get(0);
+      }
+    }
+  }
+
+  private void destroySyncObjects() {
+    VkDevice device = vulkan.getDevice();
+    for (long fence : inFlightFences) {
+      vkDestroyFence(device, fence, null);
+    }
+    for (long sem : imageAvailableSemaphores) {
+      vkDestroySemaphore(device, sem, null);
+    }
+    for (long sem : renderFinishedSemaphores) {
+      vkDestroySemaphore(device, sem, null);
+    }
+    inFlightFences = new long[0];
+    imageAvailableSemaphores = new long[0];
+    renderFinishedSemaphores = new long[0];
+  }
+
+  private void destroyUniformBuffers() {
+    VkDevice device = vulkan.getDevice();
+    for (int i = 0; i < uniformBuffers.length; i++) {
+      if (uniformBuffersMapped[i] != null) {
+        vkUnmapMemory(device, uniformBuffersMemory[i]);
+      }
+      if (uniformBuffers[i] != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, uniformBuffers[i], null);
+      }
+      if (uniformBuffersMemory[i] != VK_NULL_HANDLE) {
+        vkFreeMemory(device, uniformBuffersMemory[i], null);
+      }
+    }
+    uniformBuffers = new long[0];
+    uniformBuffersMemory = new long[0];
+    uniformBuffersMapped = new ByteBuffer[0];
+  }
+
+  private void destroyTextureResources() {
+    VkDevice device = vulkan.getDevice();
+    if (textureSampler != VK_NULL_HANDLE) {
+      vkDestroySampler(device, textureSampler, null);
+      textureSampler = VK_NULL_HANDLE;
+    }
+    if (textureImageView != VK_NULL_HANDLE) {
+      vkDestroyImageView(device, textureImageView, null);
+      textureImageView = VK_NULL_HANDLE;
+    }
+    if (textureImage != VK_NULL_HANDLE) {
+      vkDestroyImage(device, textureImage, null);
+      textureImage = VK_NULL_HANDLE;
+    }
+    if (textureImageMemory != VK_NULL_HANDLE) {
+      vkFreeMemory(device, textureImageMemory, null);
+      textureImageMemory = VK_NULL_HANDLE;
+    }
+  }
+
+  private void transitionImageLayout(long image, int oldLayout, int newLayout, int aspect) {
+    try (MemoryStack stack = stackPush()) {
+      VkCommandBufferAllocateInfo allocInfo =
+          VkCommandBufferAllocateInfo.calloc(stack)
+              .commandPool(commandPool)
+              .level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+              .commandBufferCount(1);
+      PointerBuffer cmdPtr = stack.mallocPointer(1);
+      vkAllocateCommandBuffers(vulkan.getDevice(), allocInfo, cmdPtr);
+      VkCommandBuffer cmd = new VkCommandBuffer(cmdPtr.get(0), vulkan.getDevice());
+      vkBeginCommandBuffer(
+          cmd,
+          VkCommandBufferBeginInfo.calloc(stack)
+              .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
+      VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack);
+      barrier.get(0).oldLayout(oldLayout).newLayout(newLayout).image(image);
+      barrier
+          .get(0)
+          .subresourceRange()
+          .aspectMask(aspect)
+          .baseMipLevel(0)
+          .levelCount(1)
+          .baseArrayLayer(0)
+          .layerCount(1);
+      vkCmdPipelineBarrier(
+          cmd,
+          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+          VK_PIPELINE_STAGE_TRANSFER_BIT,
+          0,
+          null,
+          null,
+          barrier);
+      vkEndCommandBuffer(cmd);
+      vkQueueSubmit(
+          vulkan.getGraphicsQueue(),
+          VkSubmitInfo.calloc(stack).pCommandBuffers(cmdPtr),
+          VK_NULL_HANDLE);
+      vulkan.waitIdle();
+    }
+  }
+
+  private void copyBufferToImage(long buffer, long image, int width, int height) {
+    try (MemoryStack stack = stackPush()) {
+      VkCommandBufferAllocateInfo allocInfo =
+          VkCommandBufferAllocateInfo.calloc(stack)
+              .commandPool(commandPool)
+              .level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+              .commandBufferCount(1);
+      PointerBuffer cmdPtr = stack.mallocPointer(1);
+      vkAllocateCommandBuffers(vulkan.getDevice(), allocInfo, cmdPtr);
+      VkCommandBuffer cmd = new VkCommandBuffer(cmdPtr.get(0), vulkan.getDevice());
+      vkBeginCommandBuffer(
+          cmd,
+          VkCommandBufferBeginInfo.calloc(stack)
+              .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
+      org.lwjgl.vulkan.VkBufferImageCopy.Buffer copyRegion =
+          org.lwjgl.vulkan.VkBufferImageCopy.calloc(1, stack);
+      copyRegion
+          .get(0)
+          .bufferOffset(0)
+          .bufferRowLength(0)
+          .bufferImageHeight(0)
+          .imageSubresource()
+          .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+          .mipLevel(0)
+          .baseArrayLayer(0)
+          .layerCount(1);
+      copyRegion.get(0).imageOffset().set(0, 0, 0);
+      copyRegion.get(0).imageExtent().set(width, height, 1);
+      org.lwjgl.vulkan.VK10.vkCmdCopyBufferToImage(
+          cmd, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copyRegion);
+      vkEndCommandBuffer(cmd);
+      vkQueueSubmit(
+          vulkan.getGraphicsQueue(),
+          VkSubmitInfo.calloc(stack).pCommandBuffers(cmdPtr),
+          VK_NULL_HANDLE);
+      vulkan.waitIdle();
+    }
+  }
+
+  private static long createBuffer(VkDevice device, MemoryStack stack, long size, int usage) {
+    VkBufferCreateInfo bufferInfo =
+        VkBufferCreateInfo.calloc(stack)
+            .size(size)
+            .usage(usage)
+            .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+    LongBuffer buffer = stack.mallocLong(1);
+    VulkanContext.checkVk(vkCreateBuffer(device, bufferInfo, null, buffer), "buffer");
+    return buffer.get(0);
+  }
+
+  private static long allocateBufferMemory(
+      VulkanContext vulkan, VkDevice device, MemoryStack stack, long buffer, int properties) {
+    VkMemoryRequirements requirements = VkMemoryRequirements.malloc(stack);
+    vkGetBufferMemoryRequirements(device, buffer, requirements);
+    VkMemoryAllocateInfo allocInfo =
+        VkMemoryAllocateInfo.calloc(stack)
+            .allocationSize(requirements.size())
+            .memoryTypeIndex(vulkan.findMemoryType(requirements.memoryTypeBits(), properties));
+    LongBuffer memory = stack.mallocLong(1);
+    VulkanContext.checkVk(vkAllocateMemory(device, allocInfo, null, memory), "buffer memory");
+    vkBindBufferMemory(device, buffer, memory.get(0), 0);
+    return memory.get(0);
+  }
+}
