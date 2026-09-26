@@ -59,8 +59,7 @@ public final class GpuRegionMesh {
    * @param parts per-chunk mesh data
    * @return uploaded region mesh (may be empty)
    */
-  public static GpuRegionMesh upload(
-      VulkanContext vulkan, Collection<ChunkMesher.MeshData> parts) {
+  public static GpuRegionMesh upload(VulkanContext vulkan, Collection<ChunkMesher.MeshData> parts) {
     int oVertFloats = 0;
     int oIndCount = 0;
     int tVertFloats = 0;
@@ -189,10 +188,10 @@ public final class GpuRegionMesh {
     freeBuffer(device, opaqueIndexBuffer, opaqueIndexMemory);
     freeBuffer(device, translucentVertexBuffer, translucentVertexMemory);
     freeBuffer(device, translucentIndexBuffer, translucentIndexMemory);
-    opaqueVertexBuffer = opaqueIndexBuffer = translucentVertexBuffer = translucentIndexBuffer =
-        VK_NULL_HANDLE;
-    opaqueVertexMemory = opaqueIndexMemory = translucentVertexMemory = translucentIndexMemory =
-        VK_NULL_HANDLE;
+    opaqueVertexBuffer =
+        opaqueIndexBuffer = translucentVertexBuffer = translucentIndexBuffer = VK_NULL_HANDLE;
+    opaqueVertexMemory =
+        opaqueIndexMemory = translucentVertexMemory = translucentIndexMemory = VK_NULL_HANDLE;
     opaqueIndexCount = translucentIndexCount = 0;
   }
 

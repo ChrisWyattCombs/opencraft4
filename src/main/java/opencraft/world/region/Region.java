@@ -8,8 +8,8 @@ import java.nio.file.Path;
 import opencraft.world.chunk.Chunk;
 
 /**
- * In-memory container for up to {@link #REGION_SIZE}×{@link #REGION_SIZE} chunks stored in a
- * dense array (null = not loaded).
+ * In-memory container for up to {@link #REGION_SIZE}×{@link #REGION_SIZE} chunks stored in a dense
+ * array (null = not loaded).
  */
 public final class Region {
 
@@ -23,6 +23,7 @@ public final class Region {
   private static final int FORMAT_VERSION = 1;
 
   private final RegionPos position;
+
   /** Indexed by {@code localX + localZ * REGION_SIZE}; null means absent. */
   private final Chunk[] chunks = new Chunk[CHUNK_COUNT];
 
@@ -80,7 +81,9 @@ public final class Region {
     return previous;
   }
 
-  /** @return number of non-null chunk slots currently held in memory */
+  /**
+   * @return number of non-null chunk slots currently held in memory
+   */
   public int loadedCount() {
     int count = 0;
     for (Chunk chunk : chunks) {

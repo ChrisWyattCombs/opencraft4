@@ -14,9 +14,27 @@ This is an independent fan-style project inspired by classic voxel sandbox gamep
 - A Vulkan-capable GPU and drivers
 - Ultralight SDK natives under `natives/ultralight-legacy/` (preferred) or `natives/ultralight/`
 
+Fetch the Ultralight SDK (revision matching `ultralight-java` 0.4.12):
+
+```bash
+./tools/fetch-ultralight-sdk.sh
+```
+
+On Apple Silicon, Ultralight’s published macOS binaries are **x86_64 only**. Use a macOS x64 JDK under Rosetta (a Temurin 21 x64 install can live in `.jdk/temurin-21-x64/`) and:
+
+```bash
+./tools/run-macos.sh
+```
+
 ## Run
 
-From the project root:
+From the project root (Intel Mac / Windows / Linux):
+
+```bash
+mvn -q compile exec:exec
+```
+
+On Windows, `exec:java` also works:
 
 ```bash
 mvn -q compile exec:java
@@ -28,6 +46,7 @@ Or with an explicit classpath (after `mvn compile` and `mvn dependency:build-cla
 java -cp "target/classes;$(Get-Content cp.txt)" opencraft.Main
 ```
 
+On macOS, pass `-XstartOnFirstThread` when launching `java` directly.
 ## Controls (in world)
 
 - **WASD** — move
@@ -37,7 +56,7 @@ java -cp "target/classes;$(Get-Content cp.txt)" opencraft.Main
 - **Escape** — save the world, write `screenshot.png` for the menu icon, return to main menu
 - Close the window — also saves and writes `screenshot.png`
 
-Worlds are stored under `%APPDATA%/opencraft/worlds` on Windows (or `~/opencraft/worlds` elsewhere). The singleplayer list shows each world's last screenshot as its icon when present.
+Worlds are stored under `%APPDATA%/opencraft/worlds` on Windows, `~/Library/Application Support/opencraft/worlds` on macOS, or `~/opencraft/worlds` elsewhere. The singleplayer list shows each world's last screenshot as its icon when present.
 
 ## Feature checklist
 
@@ -50,7 +69,7 @@ Worlds are stored under `%APPDATA%/opencraft/worlds` on Windows (or `~/opencraft
 - [x] Seeded Perlin climate biomes (ocean, river, lake, plains, forest, desert, hills)
 - [x] Continuous climate (domain-warped Perlin; no square biome grid)
 - [x] Blocks: grass, dirt, stone, sand, wood, leaves, water
-- [x] Chunks `16×256×16`, region saves under `%APPDATA%/opencraft/worlds/<name>/`
+- [x] Chunks `16×256×16`, region saves under the platform worlds directory (`%APPDATA%/opencraft/worlds/<name>/` on Windows, `~/Library/Application Support/opencraft/worlds/<name>/` on macOS)
 - [x] Greedy meshing + async mesh builds + merged region draws
 - [x] Vulkan world renderer + GLSL shaders (`world.vert` / `world.frag`)
 - [x] Uncapped present when available (`IMMEDIATE` swapchain mode)

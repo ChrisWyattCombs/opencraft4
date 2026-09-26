@@ -169,10 +169,10 @@ public final class GpuChunkMesh {
     freeBuffer(device, opaqueIndexBuffer, opaqueIndexMemory);
     freeBuffer(device, translucentVertexBuffer, translucentVertexMemory);
     freeBuffer(device, translucentIndexBuffer, translucentIndexMemory);
-    opaqueVertexBuffer = opaqueIndexBuffer = translucentVertexBuffer = translucentIndexBuffer =
-        VK_NULL_HANDLE;
-    opaqueVertexMemory = opaqueIndexMemory = translucentVertexMemory = translucentIndexMemory =
-        VK_NULL_HANDLE;
+    opaqueVertexBuffer =
+        opaqueIndexBuffer = translucentVertexBuffer = translucentIndexBuffer = VK_NULL_HANDLE;
+    opaqueVertexMemory =
+        opaqueIndexMemory = translucentVertexMemory = translucentIndexMemory = VK_NULL_HANDLE;
     opaqueIndexCount = translucentIndexCount = 0;
   }
 
@@ -194,7 +194,9 @@ public final class GpuChunkMesh {
     return opaqueIndexCount == 0 && translucentIndexCount == 0;
   }
 
-  /** @return whether this mesh has translucent water faces */
+  /**
+   * @return whether this mesh has translucent water faces
+   */
   public boolean hasTranslucent() {
     return translucentIndexCount > 0;
   }

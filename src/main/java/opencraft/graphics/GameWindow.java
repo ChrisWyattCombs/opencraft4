@@ -1,10 +1,12 @@
 package opencraft.graphics;
 
 import static org.lwjgl.glfw.GLFW.GLFW_CLIENT_API;
+import static org.lwjgl.glfw.GLFW.GLFW_COCOA_RETINA_FRAMEBUFFER;
 import static org.lwjgl.glfw.GLFW.GLFW_DONT_CARE;
 import static org.lwjgl.glfw.GLFW.GLFW_FALSE;
 import static org.lwjgl.glfw.GLFW.GLFW_NO_API;
 import static org.lwjgl.glfw.GLFW.GLFW_RESIZABLE;
+import static org.lwjgl.glfw.GLFW.GLFW_SCALE_FRAMEBUFFER;
 import static org.lwjgl.glfw.GLFW.GLFW_TRUE;
 import static org.lwjgl.glfw.GLFW.GLFW_VISIBLE;
 import static org.lwjgl.glfw.GLFW.glfwCreateWindow;
@@ -28,10 +30,15 @@ import static org.lwjgl.glfw.GLFW.glfwWindowHint;
 import static org.lwjgl.glfw.GLFW.glfwWindowShouldClose;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
+import static org.lwjgl.system.macosx.ObjCRuntime.sel_getUid;
 
 import java.nio.IntBuffer;
+import java.util.Locale;
+import org.lwjgl.glfw.GLFWNativeCocoa;
 import org.lwjgl.glfw.GLFWVulkan;
+import org.lwjgl.system.JNI;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.macosx.ObjCRuntime;
 
 /**
  * GLFW window used as the Vulkan render surface.
@@ -48,6 +55,8 @@ public final class GameWindow implements AutoCloseable {
   private final long handle;
   private int width;
   private int height;
+  private int framebufferWidth;
+  private int framebufferHeight;
   private boolean framebufferResized;
   private boolean fullscreen;
   private int windowedX;
@@ -59,6 +68,8 @@ public final class GameWindow implements AutoCloseable {
     this.handle = handle;
     this.width = width;
     this.height = height;
+    this.framebufferWidth = width;
+    this.framebufferHeight = height;
     this.windowedWidth = width;
     this.windowedHeight = height;
   }
@@ -93,6 +104,9 @@ public final class GameWindow implements AutoCloseable {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    // Keep framebuffer/render pixels equal to the window size (including on Retina).
+    glfwWindowHint(GLFW_SCALE_FRAMEBUFFER, GLFW_FALSE);
+    glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);
 
     long handle = glfwCreateWindow(width, height, title, NULL, NULL);
     if (handle == NULL) {
@@ -104,24 +118,123 @@ public final class GameWindow implements AutoCloseable {
     glfwSetFramebufferSizeCallback(
         handle,
         (win, newWidth, newHeight) -> {
-          window.width = Math.max(newWidth, 1);
-          window.height = Math.max(newHeight, 1);
+          window.syncSizes();
           window.framebufferResized = true;
         });
+    window.syncSizes();
+    disableRetinaFramebufferScaling(handle);
+    window.syncSizes();
+    System.out.println(
+        "[Opencraft] render "
+            + window.width
+            + "x"
+            + window.height
+            + " framebuffer "
+            + window.framebufferWidth
+            + "x"
+            + window.framebufferHeight);
 
     try (MemoryStack stack = stackPush()) {
       IntBuffer pWidth = stack.mallocInt(1);
       IntBuffer pHeight = stack.mallocInt(1);
       glfwGetWindowSize(handle, pWidth, pHeight);
-      var vidmode = glfwGetVideoMode(glfwGetPrimaryMonitor());
-      if (vidmode != null) {
-        glfwSetWindowPos(
-            handle, (vidmode.width() - pWidth.get(0)) / 2, (vidmode.height() - pHeight.get(0)) / 2);
+      long monitor = glfwGetPrimaryMonitor();
+      if (monitor != NULL) {
+        var vidmode = glfwGetVideoMode(monitor);
+        if (vidmode != null) {
+          glfwSetWindowPos(
+              handle,
+              (vidmode.width() - pWidth.get(0)) / 2,
+              (vidmode.height() - pHeight.get(0)) / 2);
+        }
       }
     }
 
     glfwShowWindow(handle);
     return window;
+  }
+
+  /**
+   * Refreshes window client size (used for rendering) and framebuffer size (swapchain) from GLFW.
+   */
+  private void syncSizes() {
+    try (MemoryStack stack = stackPush()) {
+      IntBuffer winW = stack.mallocInt(1);
+      IntBuffer winH = stack.mallocInt(1);
+      IntBuffer fbW = stack.mallocInt(1);
+      IntBuffer fbH = stack.mallocInt(1);
+      glfwGetWindowSize(handle, winW, winH);
+      glfwGetFramebufferSize(handle, fbW, fbH);
+      // Render at window client size so the game resolution matches the window.
+      width = Math.max(winW.get(0), 1);
+      height = Math.max(winH.get(0), 1);
+      framebufferWidth = Math.max(fbW.get(0), 1);
+      framebufferHeight = Math.max(fbH.get(0), 1);
+    }
+  }
+
+  /**
+   * On macOS Retina, forces the Cocoa view layer to {@code 1x} so the Vulkan drawable matches the
+   * window when GLFW's scale hints are ignored for Metal surfaces.
+   *
+   * @param windowHandle GLFW window
+   */
+  private static void disableRetinaFramebufferScaling(long windowHandle) {
+    String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+    if (!os.contains("mac")) {
+      return;
+    }
+    try {
+      long view = GLFWNativeCocoa.glfwGetCocoaView(windowHandle);
+      if (view == NULL) {
+        return;
+      }
+      long objcMsgSend = ObjCRuntime.getLibrary().getFunctionAddress("objc_msgSend");
+      long layer = JNI.invokePPP(view, sel_getUid("layer"), objcMsgSend);
+      if (layer == NULL) {
+        return;
+      }
+      // CGFloat is float-compatible via the float msgSend binding on Apple platforms.
+      JNI.invokePPV(layer, sel_getUid("setContentsScale:"), 1.0f, objcMsgSend);
+    } catch (Throwable ignored) {
+      // Best-effort only; render size still follows window client size.
+    }
+  }
+
+  /**
+   * Horizontal scale from render/window coordinates to swapchain framebuffer pixels.
+   *
+   * @return typically {@code 1} or {@code 2} on Retina displays
+   */
+  public float getContentScaleX() {
+    return framebufferWidth / (float) width;
+  }
+
+  /**
+   * Vertical scale from render/window coordinates to swapchain framebuffer pixels.
+   *
+   * @return typically {@code 1} or {@code 2} on Retina displays
+   */
+  public float getContentScaleY() {
+    return framebufferHeight / (float) height;
+  }
+
+  /**
+   * Returns the Vulkan swapchain framebuffer width in pixels.
+   *
+   * @return framebuffer width
+   */
+  public int getFramebufferWidth() {
+    return framebufferWidth;
+  }
+
+  /**
+   * Returns the Vulkan swapchain framebuffer height in pixels.
+   *
+   * @return framebuffer height
+   */
+  public int getFramebufferHeight() {
+    return framebufferHeight;
   }
 
   /**
@@ -162,13 +275,7 @@ public final class GameWindow implements AutoCloseable {
         windowedHeight = h.get(0);
       }
       glfwSetWindowMonitor(
-          handle,
-          monitor,
-          0,
-          0,
-          vidmode.width(),
-          vidmode.height(),
-          vidmode.refreshRate());
+          handle, monitor, 0, 0, vidmode.width(), vidmode.height(), vidmode.refreshRate());
       fullscreen = true;
       System.out.println(
           "[Opencraft] exclusive fullscreen "
@@ -179,20 +286,19 @@ public final class GameWindow implements AutoCloseable {
               + vidmode.refreshRate());
     } else {
       glfwSetWindowMonitor(
-          handle,
-          NULL,
-          windowedX,
-          windowedY,
-          windowedWidth,
-          windowedHeight,
-          GLFW_DONT_CARE);
+          handle, NULL, windowedX, windowedY, windowedWidth, windowedHeight, GLFW_DONT_CARE);
       fullscreen = false;
       System.out.println("[Opencraft] windowed " + windowedWidth + "x" + windowedHeight);
     }
+    syncSizes();
     framebufferResized = true;
   }
 
-  /** @return whether the window is currently exclusive fullscreen */
+  /**
+   * Returns whether the window is currently exclusive fullscreen.
+   *
+   * @return {@code true} if exclusive fullscreen is active
+   */
   public boolean isFullscreen() {
     return fullscreen;
   }
@@ -225,7 +331,7 @@ public final class GameWindow implements AutoCloseable {
   }
 
   /**
-   * Returns the current framebuffer width in pixels.
+   * Returns the current render width in pixels (window client size).
    *
    * @return width in pixels
    */
@@ -234,7 +340,7 @@ public final class GameWindow implements AutoCloseable {
   }
 
   /**
-   * Returns the current framebuffer height in pixels.
+   * Returns the current render height in pixels (window client size).
    *
    * @return height in pixels
    */

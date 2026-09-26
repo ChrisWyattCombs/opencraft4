@@ -61,13 +61,11 @@ import static org.lwjgl.glfw.GLFW.GLFW_PRESS;
 import static org.lwjgl.glfw.GLFW.GLFW_REPEAT;
 import static org.lwjgl.glfw.GLFW.glfwGetCursorPos;
 import static org.lwjgl.glfw.GLFW.glfwGetMouseButton;
-import static org.lwjgl.glfw.GLFW.glfwGetWindowContentScale;
 import static org.lwjgl.glfw.GLFW.glfwSetCharCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetCursorPosCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetKeyCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetMouseButtonCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetScrollCallback;
-import static org.lwjgl.glfw.GLFW.glfwSetWindowContentScaleCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetWindowFocusCallback;
 
 import com.labymedia.ultralight.UltralightView;
@@ -101,27 +99,9 @@ final class GuiInput {
   void bind(UltralightView view) {
     this.view = view;
     long window = display.getWindowHandle();
-
-    float[] sx = new float[1];
-    float[] sy = new float[1];
-    glfwGetWindowContentScale(window, sx, sy);
-    if (sx[0] > 0f) {
-      xScale = sx[0];
-    }
-    if (sy[0] > 0f) {
-      yScale = sy[0];
-    }
-
-    glfwSetWindowContentScaleCallback(
-        window,
-        (win, x, y) -> {
-          if (x > 0f) {
-            xScale = x;
-          }
-          if (y > 0f) {
-            yScale = y;
-          }
-        });
+    // Render size matches window client size, so cursor coords need no scaling.
+    xScale = 1f;
+    yScale = 1f;
     glfwSetWindowFocusCallback(
         window,
         (win, focused) -> {

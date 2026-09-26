@@ -85,8 +85,7 @@ public final class TerrainGenerator {
         double continentalness =
             sampleClimate(continentalNoise, climateXZ[0], climateXZ[1], CONTINENT_SCALE);
         double moisture =
-            stretchClimate(
-                sampleClimate(moistureNoise, climateXZ[0], climateXZ[1], CLIMATE_SCALE));
+            stretchClimate(sampleClimate(moistureNoise, climateXZ[0], climateXZ[1], CLIMATE_SCALE));
 
         double hillRise = sampleHillRise(worldX, worldZ);
 
@@ -137,10 +136,8 @@ public final class TerrainGenerator {
           chunk.setBlock(lx, y, lz, id);
         }
 
-        boolean canFitTree =
-            lx >= 2 && lx < Chunk.SIZE_X - 2 && lz >= 2 && lz < Chunk.SIZE_Z - 2;
-        boolean onTreeCell =
-            Math.floorMod(worldX, 4) == 1 && Math.floorMod(worldZ, 4) == 1;
+        boolean canFitTree = lx >= 2 && lx < Chunk.SIZE_X - 2 && lz >= 2 && lz < Chunk.SIZE_Z - 2;
+        boolean onTreeCell = Math.floorMod(worldX, 4) == 1 && Math.floorMod(worldZ, 4) == 1;
         // Trees only in grassy forests — never desert, beaches, plains, or hills.
         if (!flooded
             && "Forest".equals(biome.getName())
@@ -238,8 +235,7 @@ public final class TerrainGenerator {
     double temperature = sampleClimate(temperatureNoise, warped[0], warped[1], CLIMATE_SCALE);
     double moisture =
         stretchClimate(sampleClimate(moistureNoise, warped[0], warped[1], CLIMATE_SCALE));
-    double continentalness =
-        sampleClimate(continentalNoise, warped[0], warped[1], CONTINENT_SCALE);
+    double continentalness = sampleClimate(continentalNoise, warped[0], warped[1], CONTINENT_SCALE);
     double hillsFactor = clamp01(sampleHillRise(worldX, worldZ) / 0.28);
     return BiomeRegistry.pickBiome(temperature, moisture, continentalness, hillsFactor);
   }
@@ -247,8 +243,7 @@ public final class TerrainGenerator {
   /** Offsets sample position with seeded Perlin so biome borders look organic, not grid-aligned. */
   private double[] warpClimateCoords(int worldX, int worldZ) {
     double wx =
-        worldX
-            + climateWarpX.octaveNoise(worldX * 0.0025, worldZ * 0.0025, 3, 0.5) * CLIMATE_WARP;
+        worldX + climateWarpX.octaveNoise(worldX * 0.0025, worldZ * 0.0025, 3, 0.5) * CLIMATE_WARP;
     double wz =
         worldZ
             + climateWarpZ.octaveNoise(worldX * 0.0025 + 19.7, worldZ * 0.0025 - 7.3, 3, 0.5)
@@ -276,8 +271,7 @@ public final class TerrainGenerator {
   }
 
   /** Narrow winding river channels carved into moist lowlands. */
-  private double riverCarve(
-      int worldX, int worldZ, double moisture, double continentalness) {
+  private double riverCarve(int worldX, int worldZ, double moisture, double continentalness) {
     if (continentalness < -0.2 || moisture < 0.2) {
       return 0.0;
     }

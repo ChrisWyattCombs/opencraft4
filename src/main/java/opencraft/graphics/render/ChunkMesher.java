@@ -40,7 +40,9 @@ public final class ChunkMesher {
       int[] opaqueIndices,
       float[] translucentVertices,
       int[] translucentIndices) {
-    /** @return {@code true} if both passes are empty */
+    /**
+     * @return {@code true} if both passes are empty
+     */
     public boolean isEmpty() {
       return opaqueIndices.length == 0 && translucentIndices.length == 0;
     }
@@ -134,19 +136,7 @@ public final class ChunkMesher {
     // Greedy opaque faces per direction.
     for (int face = 0; face < 6; face++) {
       greedyOpaqueFace(
-          face,
-          minY,
-          maxY,
-          baseX,
-          baseZ,
-          blocks,
-          negX,
-          posX,
-          negZ,
-          posZ,
-          registry,
-          atlas,
-          topSolid,
+          face, minY, maxY, baseX, baseZ, blocks, negX, posX, negZ, posZ, registry, atlas, topSolid,
           opaque);
     }
 
@@ -166,14 +156,7 @@ public final class ChunkMesher {
             Block neighbor =
                 registry.get(
                     blockAt(
-                        blocks,
-                        negX,
-                        posX,
-                        negZ,
-                        posZ,
-                        x + DX[face],
-                        y + DY[face],
-                        z + DZ[face]));
+                        blocks, negX, posX, negZ, posZ, x + DX[face], y + DY[face], z + DZ[face]));
             if (neighbor.isLiquid() || neighbor.isOpaque()) {
               continue;
             }
@@ -184,29 +167,19 @@ public final class ChunkMesher {
             float[] uv = atlas.uvFor(path);
             float shade =
                 faceShade(
-                    face,
-                    x + DX[face],
-                    y + DY[face],
-                    z + DZ[face],
-                    blocks,
-                    negX,
-                    posX,
-                    negZ,
-                    posZ,
-                    registry,
-                    topSolid)
-                * 0.95f;
-            emitUnitQuad(
-                translucent,
-                face,
-                baseX + x,
-                y,
-                baseZ + z,
-                1,
-                1,
-                uv[0],
-                uv[1],
-                shade);
+                        face,
+                        x + DX[face],
+                        y + DY[face],
+                        z + DZ[face],
+                        blocks,
+                        negX,
+                        posX,
+                        negZ,
+                        posZ,
+                        registry,
+                        topSolid)
+                    * 0.95f;
+            emitUnitQuad(translucent, face, baseX + x, y, baseZ + z, 1, 1, uv[0], uv[1], shade);
           }
         }
       }
@@ -256,7 +229,12 @@ public final class ChunkMesher {
           int x = xyz[0];
           int y = xyz[1];
           int z = xyz[2];
-          if (x < 0 || x >= Chunk.SIZE_X || z < 0 || z >= Chunk.SIZE_Z || y < 0 || y >= Chunk.SIZE_Y) {
+          if (x < 0
+              || x >= Chunk.SIZE_X
+              || z < 0
+              || z >= Chunk.SIZE_Z
+              || y < 0
+              || y >= Chunk.SIZE_Y) {
             continue;
           }
           byte id = blockAt(blocks, negX, posX, negZ, posZ, x, y, z);
@@ -343,7 +321,9 @@ public final class ChunkMesher {
     }
   }
 
-  /** @return {sliceCount, uSize, vSize, sliceStart} */
+  /**
+   * @return {sliceCount, uSize, vSize, sliceStart}
+   */
   private static int[] sliceDims(int face, int minY, int maxY) {
     int ySpan = maxY - minY + 1;
     return switch (face) {

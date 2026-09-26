@@ -3,6 +3,7 @@ package opencraft.game;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
+import opencraft.AppDirectories;
 import opencraft.graphics.Display;
 import opencraft.graphics.render.ShaderCompiler;
 import opencraft.graphics.render.TextureAtlas;
@@ -44,19 +45,13 @@ public final class GameController implements AutoCloseable {
    * Creates a controller for the given display and save root.
    *
    * @param display Vulkan display
-   * @param projectRoot project directory (unused for saves; worlds go under {@code
-   *     %APPDATA%/opencraft})
+   * @param projectRoot project directory (unused for saves; worlds go under {@link
+   *     AppDirectories#worldsDirectory()})
    */
   public GameController(Display display, Path projectRoot) {
     this.display = display;
     this.projectRoot = projectRoot;
-    // Windows: %APPDATA%\opencraft\worlds  (Roaming). Else: ~/opencraft/worlds
-    String appData = System.getenv("APPDATA");
-    Path base =
-        appData != null && !appData.isBlank()
-            ? Path.of(appData)
-            : Path.of(System.getProperty("user.home"));
-    this.worldsRoot = base.resolve("opencraft").resolve("worlds");
+    this.worldsRoot = AppDirectories.worldsDirectory();
   }
 
   /**
@@ -107,7 +102,7 @@ public final class GameController implements AutoCloseable {
         try {
           if (hud != null) {
             session.setHudOverlay(
-                hud, UltralightGui.HUD_WIDTH, UltralightGui.HUD_HEIGHT, gui.hudRowBytes());
+                hud, gui.hudPixelWidth(), gui.hudPixelHeight(), gui.hudRowBytes());
           } else {
             session.setHudOverlay(null, 0, 0, 0);
           }
@@ -182,8 +177,7 @@ public final class GameController implements AutoCloseable {
         return;
       }
     } catch (IOException e) {
-      gui.runScript(
-          "if(window.showCreateError){showCreateError(\"Could not check world name\");}");
+      gui.runScript("if(window.showCreateError){showCreateError(\"Could not check world name\");}");
       return;
     }
     startWorldLoad(
@@ -312,9 +306,7 @@ public final class GameController implements AutoCloseable {
     }
   }
 
-  /**
-   * Saves the active world, captures a menu icon screenshot, and returns to the main menu.
-   */
+  /** Saves the active world, captures a menu icon screenshot, and returns to the main menu. */
   private void returnToMainMenu() {
     System.out.println("[Opencraft] Escape → save + main menu");
     if (session != null) {

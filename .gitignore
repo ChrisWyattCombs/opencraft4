@@ -12,3 +12,4 @@ cp.txt
 natives/ultralight/
 natives/ultralight-legacy/
 natives/*.7z
+.jdk/

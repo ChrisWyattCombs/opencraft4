@@ -42,6 +42,7 @@ import static org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 import static org.lwjgl.vulkan.VK10.VK_DYNAMIC_STATE_SCISSOR;
 import static org.lwjgl.vulkan.VK10.VK_DYNAMIC_STATE_VIEWPORT;
 import static org.lwjgl.vulkan.VK10.VK_FENCE_CREATE_SIGNALED_BIT;
+import static org.lwjgl.vulkan.VK10.VK_FILTER_LINEAR;
 import static org.lwjgl.vulkan.VK10.VK_FILTER_NEAREST;
 import static org.lwjgl.vulkan.VK10.VK_FORMAT_B8G8R8A8_UNORM;
 import static org.lwjgl.vulkan.VK10.VK_FORMAT_D32_SFLOAT;
@@ -198,6 +199,7 @@ public final class WorldRenderer implements AutoCloseable {
   private static final int UNIFORM_BUFFER_SIZE = 256;
   private static final int VERTEX_STRIDE = 32;
   private static final int COLOR_FORMAT = VK_FORMAT_B8G8R8A8_UNORM;
+
   /** Chunks per side of a merged GPU region mesh (4×4 = 16 chunks / draw). */
   private static final int MESH_REGION = 4;
 
@@ -415,8 +417,7 @@ public final class WorldRenderer implements AutoCloseable {
           }
           ChunkMesher.MeshData existing = chunkMeshes.get(pos);
           Chunk loaded = world.getLoadedChunk(pos);
-          boolean needsBuild =
-              existing == null || (loaded != null && loaded.isDirty());
+          boolean needsBuild = existing == null || (loaded != null && loaded.isDirty());
           if (!needsBuild) {
             continue;
           }
@@ -459,7 +460,8 @@ public final class WorldRenderer implements AutoCloseable {
     int rz = (int) key;
     int x0 = rx * MESH_REGION;
     int z0 = rz * MESH_REGION;
-    java.util.ArrayList<ChunkMesher.MeshData> parts = new java.util.ArrayList<>(MESH_REGION * MESH_REGION);
+    java.util.ArrayList<ChunkMesher.MeshData> parts =
+        new java.util.ArrayList<>(MESH_REGION * MESH_REGION);
     boolean any = false;
     for (int cz = z0; cz < z0 + MESH_REGION; cz++) {
       for (int cx = x0; cx < x0 + MESH_REGION; cx++) {
@@ -577,13 +579,7 @@ public final class WorldRenderer implements AutoCloseable {
       float fogG = underwater ? 0.18f : 0.81f;
       float fogB = underwater ? 0.32f : 0.92f;
       VkClearValue.Buffer clearValues = VkClearValue.calloc(2, stack);
-      clearValues
-          .get(0)
-          .color()
-          .float32(0, fogR)
-          .float32(1, fogG)
-          .float32(2, fogB)
-          .float32(3, 1f);
+      clearValues.get(0).color().float32(0, fogR).float32(1, fogG).float32(2, fogB).float32(3, 1f);
       clearValues.get(1).depthStencil().depth(1f).stencil(0);
       clearValues.position(0);
 
@@ -691,11 +687,7 @@ public final class WorldRenderer implements AutoCloseable {
         region.get(0).imageExtent().set(Math.max(1, copyW), Math.max(1, copyH), 1);
         region.position(0);
         org.lwjgl.vulkan.VK10.vkCmdCopyBufferToImage(
-            cmd,
-            hudStagingBuffer,
-            colorImage,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            region);
+            cmd, hudStagingBuffer, colorImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
 
         VkImageMemoryBarrier.Buffer toSrc = VkImageMemoryBarrier.calloc(1, stack);
         toSrc
@@ -771,15 +763,17 @@ public final class WorldRenderer implements AutoCloseable {
           null,
           barrier);
 
-      int copyW = Math.min(targetWidth, swapchain.getExtent().width());
-      int copyH = Math.min(targetHeight, swapchain.getExtent().height());
+      int srcW = targetWidth;
+      int srcH = targetHeight;
+      int dstW = swapchain.getExtent().width();
+      int dstH = swapchain.getExtent().height();
       org.lwjgl.vulkan.VkImageBlit.Buffer blit = org.lwjgl.vulkan.VkImageBlit.calloc(1, stack);
       blit.get(0).srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
       blit.get(0).dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
       blit.get(0).srcOffsets(0).set(0, 0, 0);
-      blit.get(0).srcOffsets(1).set(copyW, copyH, 1);
+      blit.get(0).srcOffsets(1).set(srcW, srcH, 1);
       blit.get(0).dstOffsets(0).set(0, 0, 0);
-      blit.get(0).dstOffsets(1).set(copyW, copyH, 1);
+      blit.get(0).dstOffsets(1).set(dstW, dstH, 1);
       blit.position(0);
       vkCmdBlitImage(
           cmd,
@@ -788,7 +782,7 @@ public final class WorldRenderer implements AutoCloseable {
           swapImage,
           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
           blit,
-          VK_FILTER_NEAREST);
+          VK_FILTER_LINEAR);
 
       VkImageMemoryBarrier.Buffer toPresent = VkImageMemoryBarrier.calloc(1, stack);
       toPresent

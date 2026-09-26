@@ -64,7 +64,9 @@ public final class ChunkMeshScheduler implements AutoCloseable {
             System.err.println("[Opencraft] mesh failed " + pos + ": " + t);
             t.printStackTrace();
             completed.add(
-                new Completed(pos, new ChunkMesher.MeshData(new float[0], new int[0], new float[0], new int[0])));
+                new Completed(
+                    pos,
+                    new ChunkMesher.MeshData(new float[0], new int[0], new float[0], new int[0])));
           } finally {
             inFlight.remove(pos);
             inFlightCount.decrementAndGet();
@@ -88,7 +90,9 @@ public final class ChunkMeshScheduler implements AutoCloseable {
     return out;
   }
 
-  /** @return number of builds currently running or queued in the pool sense */
+  /**
+   * @return number of builds currently running or queued in the pool sense
+   */
   public int inFlight() {
     return inFlightCount.get();
   }

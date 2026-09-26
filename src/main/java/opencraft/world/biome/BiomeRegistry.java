@@ -20,37 +20,51 @@ public final class BiomeRegistry {
 
   private BiomeRegistry() {}
 
-  /** @return ocean biome singleton */
+  /**
+   * @return ocean biome singleton
+   */
   public static Biome ocean() {
     return OCEAN;
   }
 
-  /** @return lake biome singleton */
+  /**
+   * @return lake biome singleton
+   */
   public static Biome lake() {
     return LAKE;
   }
 
-  /** @return river biome singleton */
+  /**
+   * @return river biome singleton
+   */
   public static Biome river() {
     return RIVER;
   }
 
-  /** @return hills biome singleton */
+  /**
+   * @return hills biome singleton
+   */
   public static Biome hills() {
     return HILLS;
   }
 
-  /** @return plains biome singleton */
+  /**
+   * @return plains biome singleton
+   */
   public static Biome plains() {
     return PLAINS;
   }
 
-  /** @return forest biome singleton */
+  /**
+   * @return forest biome singleton
+   */
   public static Biome forest() {
     return FOREST;
   }
 
-  /** @return desert biome singleton */
+  /**
+   * @return desert biome singleton
+   */
   public static Biome desert() {
     return DESERT;
   }
@@ -75,10 +89,7 @@ public final class BiomeRegistry {
     if (moisture > 0.7 && continentalness < 0.2 && hillsFactor < 0.25) {
       return LAKE;
     }
-    if (moisture > 0.55
-        && continentalness > -0.1
-        && continentalness < 0.35
-        && hillsFactor < 0.3) {
+    if (moisture > 0.55 && continentalness > -0.1 && continentalness < 0.35 && hillsFactor < 0.3) {
       return RIVER;
     }
 

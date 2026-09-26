@@ -135,11 +135,20 @@ public final class BgraFramePresenter implements AutoCloseable {
       createCommandBuffers();
     }
 
-    int required = rowBytes * imageHeight;
+    VkExtent2D swapchainExtent = swapchain.getExtent();
+    int destWidth = Math.max(1, swapchainExtent.width());
+    int destHeight = Math.max(1, swapchainExtent.height());
+    int destRowBytes = destWidth * 4;
+    int required = destRowBytes * destHeight;
     ensureStagingCapacity(required);
     stagingMapped.clear();
-    pixels.limit(pixels.position() + required);
-    stagingMapped.put(pixels);
+    int srcLimit = pixels.position() + rowBytes * imageHeight;
+    if (imageWidth == destWidth && imageHeight == destHeight && rowBytes == destRowBytes) {
+      pixels.limit(srcLimit);
+      stagingMapped.put(pixels);
+    } else {
+      scaleBgraIntoStaging(pixels, imageWidth, imageHeight, rowBytes, destWidth, destHeight);
+    }
     stagingMapped.flip();
 
     VkDevice device = vulkan.getDevice();
@@ -187,7 +196,6 @@ public final class BgraFramePresenter implements AutoCloseable {
               .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
       vkBeginCommandBuffer(cmd, beginInfo);
 
-      VkExtent2D swapchainExtent = swapchain.getExtent();
       transitionImageLayout(
           stack,
           cmd,
@@ -203,21 +211,15 @@ public final class BgraFramePresenter implements AutoCloseable {
       region
           .get(0)
           .bufferOffset(0)
-          .bufferRowLength(rowBytes / 4)
-          .bufferImageHeight(imageHeight)
+          .bufferRowLength(destWidth)
+          .bufferImageHeight(destHeight)
           .imageSubresource()
           .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
           .mipLevel(0)
           .baseArrayLayer(0)
           .layerCount(1);
       region.get(0).imageOffset().set(0, 0, 0);
-      region
-          .get(0)
-          .imageExtent()
-          .set(
-              Math.min(imageWidth, swapchainExtent.width()),
-              Math.min(imageHeight, swapchainExtent.height()),
-              1);
+      region.get(0).imageExtent().set(destWidth, destHeight, 1);
 
       vkCmdCopyBufferToImage(
           cmd,
@@ -358,6 +360,50 @@ public final class BgraFramePresenter implements AutoCloseable {
         VulkanContext.checkVk(vkCreateFence(device, fenceInfo, null, pointer), "create fence");
         inFlightFences[i] = pointer.get(0);
       }
+    }
+  }
+
+  /**
+   * Nearest-neighbor scales a BGRA frame into {@link #stagingMapped} at the swapchain size.
+   *
+   * @param pixels source BGRA buffer
+   * @param imageWidth source width
+   * @param imageHeight source height
+   * @param rowBytes source row stride in bytes
+   * @param destWidth destination width
+   * @param destHeight destination height
+   */
+  private void scaleBgraIntoStaging(
+      ByteBuffer pixels,
+      int imageWidth,
+      int imageHeight,
+      int rowBytes,
+      int destWidth,
+      int destHeight) {
+    int destRowBytes = destWidth * 4;
+    int required = destRowBytes * destHeight;
+    byte[] src = new byte[rowBytes * imageHeight];
+    int oldPos = pixels.position();
+    int srcLimit = oldPos + rowBytes * imageHeight;
+    pixels.limit(srcLimit);
+    pixels.get(src);
+    for (int y = 0; y < destHeight; y++) {
+      int srcY = y * imageHeight / destHeight;
+      int srcRow = srcY * rowBytes;
+      int destRow = y * destRowBytes;
+      for (int x = 0; x < destWidth; x++) {
+        int srcX = x * imageWidth / destWidth;
+        int srcIndex = srcRow + srcX * 4;
+        int destIndex = destRow + x * 4;
+        stagingMapped.put(destIndex, src[srcIndex]);
+        stagingMapped.put(destIndex + 1, src[srcIndex + 1]);
+        stagingMapped.put(destIndex + 2, src[srcIndex + 2]);
+        stagingMapped.put(destIndex + 3, src[srcIndex + 3]);
+      }
+    }
+    stagingMapped.position(required);
+    if (oldPos + rowBytes * imageHeight <= pixels.capacity()) {
+      pixels.position(oldPos + rowBytes * imageHeight);
     }
   }
 

@@ -64,7 +64,8 @@ public final class UltralightGui implements AutoCloseable {
    *
    * @param display Vulkan/GLFW display used for presentation and input
    * @param projectRoot project root containing {@code natives/} and writable {@code run/}
-   * @param worldsRoot folder containing saved worlds ({@code %APPDATA%/opencraft/worlds})
+   * @param worldsRoot folder containing saved worlds ({@link
+   *     opencraft.AppDirectories#worldsDirectory()})
    */
   public UltralightGui(Display display, Path projectRoot, Path worldsRoot) {
     this.display = display;
@@ -170,8 +171,7 @@ public final class UltralightGui implements AutoCloseable {
                 .isTransparent(false)
                 .initialDeviceScale(1.0)
                 .initialFocus(false));
-    Path hudPath = uiDir.resolve("hud.html").toAbsolutePath().normalize();
-    hudView.loadURL(hudPath.toUri().toString());
+    hudView.loadURL(uiFileUrl("hud.html"));
   }
 
   /**
@@ -233,12 +233,21 @@ public final class UltralightGui implements AutoCloseable {
    */
   public void loadPage(String page) {
     currentPage = page;
-    Path pagePath = uiDir.resolve(page).toAbsolutePath().normalize();
-    view.loadURL(pagePath.toUri().toString());
+    view.loadURL(uiFileUrl(page));
   }
 
   /**
-   * Directory under the extracted UI root for singleplayer world thumbnails.
+   * Builds a {@code file://} URL under the platform filesystem root ({@code run/}).
+   *
+   * @param page file name relative to the UI root
+   * @return URL such as {@code file:///ui/main.html}
+   */
+  private static String uiFileUrl(String page) {
+    return "file:///ui/" + page;
+  }
+
+  /**
+   * Returns the directory under the extracted UI root for singleplayer world thumbnails.
    *
    * @return {@code run/ui/world-icons}
    */
@@ -312,7 +321,29 @@ public final class UltralightGui implements AutoCloseable {
     }
   }
 
-  /** @return HUD bitmap row stride in bytes */
+  /**
+   * Returns the HUD bitmap width in pixels.
+   *
+   * @return HUD surface width, or {@link #HUD_WIDTH} if the HUD view is unavailable
+   */
+  public int hudPixelWidth() {
+    return hudView != null ? (int) hudView.width() : HUD_WIDTH;
+  }
+
+  /**
+   * Returns the HUD bitmap height in pixels.
+   *
+   * @return HUD surface height, or {@link #HUD_HEIGHT} if the HUD view is unavailable
+   */
+  public int hudPixelHeight() {
+    return hudView != null ? (int) hudView.height() : HUD_HEIGHT;
+  }
+
+  /**
+   * Returns the HUD bitmap row stride in bytes.
+   *
+   * @return bytes per HUD row
+   */
   public int hudRowBytes() {
     if (hudView == null) {
       return HUD_WIDTH * 4;
