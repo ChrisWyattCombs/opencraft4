@@ -59,6 +59,9 @@ public final class UltralightGui implements AutoCloseable {
   private int lastHudChunks = -1;
   private long lastHudPaintNanos;
 
+  /** When true, skip Ultralight update/render/input — gameplay uses Vulkan only. */
+  private boolean gameplayPaused;
+
   /**
    * Creates a GUI host bound to the given display and project root.
    *
@@ -257,11 +260,52 @@ public final class UltralightGui implements AutoCloseable {
 
   /** Updates Ultralight timers and paints dirty views for the current frame. */
   public void update() {
+    if (gameplayPaused) {
+      return;
+    }
     if (view.width() != display.getWidth() || view.height() != display.getHeight()) {
       view.resize(display.getWidth(), display.getHeight());
     }
     renderer.update();
     renderer.render();
+  }
+
+  /**
+   * Stops Ultralight input and painting while in-world.
+   *
+   * <p>Ultralight + Vulkan concurrent use has been observed to abort the JVM via {@code
+   * ucrtbase.dll} ({@code 0xc0000409} / BEX64) with no Java stack. Menu resumes via {@link
+   * #resumeForMenu()}.
+   */
+  public void pauseForGameplay() {
+    gameplayPaused = true;
+    if (input != null) {
+      input.setTargetView(null);
+    }
+    if (view != null) {
+      try {
+        view.unfocus();
+      } catch (RuntimeException ignored) {
+        // Best-effort; view may already be idle.
+      }
+    }
+  }
+
+  /**
+   * Re-enables Ultralight menu input and painting after returning from PLAYING.
+   *
+   * <p>Pairs with {@link #pauseForGameplay()}.
+   */
+  public void resumeForMenu() {
+    gameplayPaused = false;
+    if (input != null && view != null) {
+      input.setTargetView(view);
+      try {
+        view.focus();
+      } catch (RuntimeException ignored) {
+        // Best-effort.
+      }
+    }
   }
 
   /**
@@ -271,7 +315,7 @@ public final class UltralightGui implements AutoCloseable {
    * @param chunkMeshes resident chunk mesh count
    */
   public void updateHud(float fps, int chunkMeshes) {
-    if (hudView == null) {
+    if (gameplayPaused || hudView == null) {
       return;
     }
     int fpsInt = Math.max(0, Math.round(fps));
@@ -300,7 +344,7 @@ public final class UltralightGui implements AutoCloseable {
    * @return BGRA pixels or {@code null}
    */
   public ByteBuffer lockHudPixels() {
-    if (hudView == null) {
+    if (gameplayPaused || hudView == null) {
       return null;
     }
     UltralightBitmapSurface surface = (UltralightBitmapSurface) hudView.surface();
@@ -447,10 +491,22 @@ public final class UltralightGui implements AutoCloseable {
           .forEach(
               path -> {
                 try {
-                  Files.copy(
-                      path,
-                      nativesDir.resolve(path.getFileName()),
-                      StandardCopyOption.REPLACE_EXISTING);
+                  Path dest = nativesDir.resolve(path.getFileName());
+                  // Never REPLACE_EXISTING over a DLL still mapped by a half-killed process —
+                  // that throws AccessDeniedException and aborts relaunch.
+                  if (Files.isRegularFile(dest) && Files.size(dest) == Files.size(path)) {
+                    return;
+                  }
+                  Files.copy(path, dest, StandardCopyOption.REPLACE_EXISTING);
+                } catch (java.nio.file.AccessDeniedException e) {
+                  Path dest = nativesDir.resolve(path.getFileName());
+                  if (!Files.isRegularFile(dest)) {
+                    throw new RuntimeException(e);
+                  }
+                  System.err.println(
+                      "[Opencraft] natives skip locked "
+                          + path.getFileName()
+                          + " (using existing copy)");
                 } catch (IOException e) {
                   throw new RuntimeException(e);
                 }

@@ -14,9 +14,11 @@ layout(binding = 2) uniform UniformBufferObject {
   mat4 projInverse;
   vec4 cameraPosUnderwater;
   vec4 fogParams;
-  vec4 fogColor;
+  vec4 fogColor; // rgb fog, a = cloudTimeSeconds
   vec4 sunDir;
 } ubo;
+
+layout(binding = 5) uniform sampler2D cloudSampler;
 
 vec3 evalSky(vec3 dir) {
   vec3 d = normalize(dir);
@@ -29,11 +31,13 @@ vec3 evalSky(vec3 dir) {
   float sunLen2 = dot(sun, sun);
   if (sunLen2 > 1e-6) {
     sun *= inversesqrt(sunLen2);
-    col += vec3(1.0, 0.88, 0.65) * pow(max(dot(d, sun), 0.0), 12.0) * 0.18;
+    // Sky disc only — keep in sync with raygen.rgen evalSkyEx.
+    float sunDot = max(dot(d, sun), 0.0);
+    col += vec3(1.0, 0.90, 0.70) * pow(sunDot, 32.0) * 0.55;
+    col += vec3(1.0, 0.96, 0.82) * pow(sunDot, 256.0) * 3.2;
+    col += vec3(1.0, 0.99, 0.92) * pow(sunDot, 2048.0) * 10.0;
   }
-  if (ubo.cameraPosUnderwater.w > 0.5) {
-    col = mix(col, vec3(0.02, 0.18, 0.35), 0.65);
-  }
+  // Clouds are composited in raygen along the camera ray (supports looking down).
   return col;
 }
 

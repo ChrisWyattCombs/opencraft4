@@ -96,6 +96,18 @@ final class GuiInput {
     this.display = display;
   }
 
+  /**
+   * Enables or disables forwarding GLFW events into Ultralight.
+   *
+   * <p>During PLAYING the menu view must not receive mouse/key events — that overlaps game input
+   * and has been linked to native {@code ucrtbase} aborts.
+   *
+   * @param view menu view to receive events, or {@code null} to pause UI input
+   */
+  void setTargetView(UltralightView view) {
+    this.view = view;
+  }
+
   void bind(UltralightView view) {
     this.view = view;
     long window = display.getWindowHandle();

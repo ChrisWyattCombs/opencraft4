@@ -105,6 +105,7 @@ import static org.lwjgl.vulkan.VK10.vkCmdBeginRenderPass;
 import static org.lwjgl.vulkan.VK10.vkCmdBindDescriptorSets;
 import static org.lwjgl.vulkan.VK10.vkCmdBindPipeline;
 import static org.lwjgl.vulkan.VK10.vkCmdBlitImage;
+import static org.lwjgl.vulkan.VK10.vkCmdCopyImageToBuffer;
 import static org.lwjgl.vulkan.VK10.vkCmdDraw;
 import static org.lwjgl.vulkan.VK10.vkCmdEndRenderPass;
 import static org.lwjgl.vulkan.VK10.vkCmdPipelineBarrier;
@@ -139,6 +140,7 @@ import static org.lwjgl.vulkan.VK10.vkDestroySampler;
 import static org.lwjgl.vulkan.VK10.vkDestroySemaphore;
 import static org.lwjgl.vulkan.VK10.vkDestroyShaderModule;
 import static org.lwjgl.vulkan.VK10.vkEndCommandBuffer;
+import static org.lwjgl.vulkan.VK10.vkFreeCommandBuffers;
 import static org.lwjgl.vulkan.VK10.vkFreeMemory;
 import static org.lwjgl.vulkan.VK10.vkGetBufferMemoryRequirements;
 import static org.lwjgl.vulkan.VK10.vkGetImageMemoryRequirements;
@@ -156,6 +158,7 @@ import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -272,6 +275,9 @@ public final class WorldRenderer implements AutoCloseable {
   private long readbackMemory;
   private ByteBuffer readbackMapped;
 
+  /** Last frame's present source (offscreen color or RT output) for menu screenshots. */
+  private long lastPresentSourceImage;
+
   private long textureImage;
   private long textureImageMemory;
   private long textureImageView;
@@ -281,6 +287,14 @@ public final class WorldRenderer implements AutoCloseable {
   private long sunImageMemory;
   private long sunImageView;
   private long sunSampler;
+
+  private long cloudImage;
+  private long cloudImageMemory;
+  private long cloudImageView;
+  private long cloudSampler;
+
+  /** Wall-clock origin for scrolling cloud UVs. */
+  private final long cloudTimeOriginNanos = System.nanoTime();
 
   private long[] uniformBuffers = new long[0];
   private long[] uniformBuffersMemory = new long[0];
@@ -365,6 +379,7 @@ public final class WorldRenderer implements AutoCloseable {
     createOffscreenTargets();
     createTextureResources();
     createSunTextureResources();
+    createCloudTextureResources();
     createUniformBuffers();
     createSkyUniformBuffers();
     createDescriptorPool();
@@ -376,6 +391,7 @@ public final class WorldRenderer implements AutoCloseable {
       try {
         rtPass = new RtWorldPass(vulkan, commandPool);
         rtPass.setTexture(textureImageView, textureSampler);
+        rtPass.setCloudTexture(cloudImageView, cloudSampler);
         System.out.println("[Opencraft] RTX primary path ready (toggle with F8)");
       } catch (RuntimeException e) {
         System.err.println("[Opencraft] RT init failed, raster only: " + e.getMessage());
@@ -878,8 +894,19 @@ public final class WorldRenderer implements AutoCloseable {
         java.util.ArrayList<GpuRegionMesh> allMeshes = new java.util.ArrayList<>();
         allMeshes.addAll(regionMeshes.values());
         allMeshes.addAll(lodMeshes.values());
+        float cloudTime = (System.nanoTime() - cloudTimeOriginNanos) * 1e-9f;
         rtPass.prepareFrame(
-            allMeshes, player, fogStart, fogEnd, fogR, fogG, fogB, underwater, span[0], span[1]);
+            allMeshes,
+            player,
+            fogStart,
+            fogEnd,
+            fogR,
+            fogG,
+            fogB,
+            underwater,
+            span[0],
+            span[1],
+            cloudTime);
         useRt = rtPass.hasGeometry();
         if (verboseRt) {
           DiagLog.log("rt#" + frameId + " prepare done hasGeom=" + useRt);
@@ -908,6 +935,7 @@ public final class WorldRenderer implements AutoCloseable {
         presentSourceImage = rtPass.getOutputImage();
         drawn = regionMeshes.size() + lodMeshes.size();
       }
+      lastPresentSourceImage = presentSourceImage;
       if (presentSourceImage == colorImage) {
         VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
         viewport.get(0).x(0).y(0).width(targetWidth).height(targetHeight).minDepth(0f).maxDepth(1f);
@@ -1016,10 +1044,15 @@ public final class WorldRenderer implements AutoCloseable {
         hudPixels.position(oldPos).limit(oldLim);
         hudStagingMapped.flip();
 
+        int hudSrcStage =
+            useRt ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        int hudSrcAccess =
+            useRt ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
         VkImageMemoryBarrier.Buffer toDst = VkImageMemoryBarrier.calloc(1, stack);
         toDst
             .get(0)
-            .srcAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
+            .srcAccessMask(hudSrcAccess)
             .dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
             .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
             .newLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
@@ -1036,13 +1069,7 @@ public final class WorldRenderer implements AutoCloseable {
             .layerCount(1);
         toDst.position(0);
         vkCmdPipelineBarrier(
-            cmd,
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            0,
-            null,
-            null,
-            toDst);
+            cmd, hudSrcStage, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, toDst);
 
         org.lwjgl.vulkan.VkBufferImageCopy.Buffer region =
             org.lwjgl.vulkan.VkBufferImageCopy.calloc(1, stack);
@@ -1098,9 +1125,14 @@ public final class WorldRenderer implements AutoCloseable {
       }
 
       VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(2, stack);
+      int blitSrcStage =
+          useRt ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+      int blitSrcAccess =
+          useRt ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+      // After HUD stamp (if any) the image is TRANSFER_SRC; RT upscale also leaves TRANSFER_SRC.
       barrier
           .get(0)
-          .srcAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
+          .srcAccessMask(blitSrcAccess)
           .dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT)
           .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
           .newLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
@@ -1134,13 +1166,7 @@ public final class WorldRenderer implements AutoCloseable {
           .layerCount(1);
       barrier.position(0);
       vkCmdPipelineBarrier(
-          cmd,
-          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-          VK_PIPELINE_STAGE_TRANSFER_BIT,
-          0,
-          null,
-          null,
-          barrier);
+          cmd, blitSrcStage, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, barrier);
 
       int srcW = targetWidth;
       int srcH = targetHeight;
@@ -1263,21 +1289,126 @@ public final class WorldRenderer implements AutoCloseable {
   }
 
   /**
-   * Copies the last rendered swapchain image to a PNG file (best effort).
+   * Copies the last presented world image to a PNG (BGRA → RGBA). Used for menu world icons.
    *
    * @param path output path
    */
   public void captureScreenshot(Path path) {
     if (readbackMapped == null || targetWidth <= 0 || targetHeight <= 0) {
+      System.err.println("[Opencraft] Screenshot skipped: no readback buffer");
+      return;
+    }
+    long srcImage = lastPresentSourceImage != VK_NULL_HANDLE ? lastPresentSourceImage : colorImage;
+    if (srcImage == VK_NULL_HANDLE) {
+      System.err.println("[Opencraft] Screenshot skipped: no source image");
       return;
     }
     try {
+      vulkan.waitIdle();
+      copyImageToReadback(srcImage, targetWidth, targetHeight);
+      vulkan.waitIdle();
+
       ByteBuffer src = readbackMapped.duplicate().clear();
-      ByteBuffer copy = BufferUtils.createByteBuffer(targetWidth * targetHeight * 4);
-      copy.put(src).flip();
-      stbi_write_png(path.toString(), targetWidth, targetHeight, 4, copy, targetWidth * 4);
-    } catch (RuntimeException e) {
+      ByteBuffer rgba = BufferUtils.createByteBuffer(targetWidth * targetHeight * 4);
+      // Offscreen / RT output is B8G8R8A8 — stbi expects RGBA.
+      for (int i = 0, n = targetWidth * targetHeight; i < n; i++) {
+        int o = i * 4;
+        byte b = src.get(o);
+        byte g = src.get(o + 1);
+        byte r = src.get(o + 2);
+        byte a = src.get(o + 3);
+        rgba.put(o, r);
+        rgba.put(o + 1, g);
+        rgba.put(o + 2, b);
+        rgba.put(o + 3, a != 0 ? a : (byte) 255);
+      }
+      Files.createDirectories(path.getParent());
+      if (!stbi_write_png(path.toString(), targetWidth, targetHeight, 4, rgba, targetWidth * 4)) {
+        System.err.println("[Opencraft] Screenshot write failed: " + path);
+      } else {
+        System.out.println("[Opencraft] Screenshot saved " + path);
+      }
+    } catch (Exception e) {
       System.err.println("Screenshot failed: " + e.getMessage());
+      e.printStackTrace();
+    }
+  }
+
+  /** GPU copy of a TRANSFER_SRC color image into the host-visible readback buffer. */
+  private void copyImageToReadback(long image, int width, int height) {
+    VkDevice device = vulkan.getDevice();
+    try (MemoryStack stack = stackPush()) {
+      VkCommandBufferAllocateInfo allocInfo =
+          VkCommandBufferAllocateInfo.calloc(stack)
+              .commandPool(commandPool)
+              .level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+              .commandBufferCount(1);
+      PointerBuffer cmdPtr = stack.mallocPointer(1);
+      VulkanContext.checkVk(vkAllocateCommandBuffers(device, allocInfo, cmdPtr), "screenshot cmd");
+      VkCommandBuffer cmd = new VkCommandBuffer(cmdPtr.get(0), device);
+      try {
+        vkBeginCommandBuffer(
+            cmd,
+            VkCommandBufferBeginInfo.calloc(stack)
+                .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT));
+
+        // Ensure TRANSFER_SRC (last frame already left it there; UNDEFINED→SRC is unsafe, keep
+        // SRC).
+        VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack);
+        barrier
+            .get(0)
+            .srcAccessMask(VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
+            .dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT)
+            .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+            .newLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+            .image(image)
+            .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+        barrier
+            .get(0)
+            .subresourceRange()
+            .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+            .baseMipLevel(0)
+            .levelCount(1)
+            .baseArrayLayer(0)
+            .layerCount(1);
+        barrier.position(0);
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            null,
+            null,
+            barrier);
+
+        org.lwjgl.vulkan.VkBufferImageCopy.Buffer region =
+            org.lwjgl.vulkan.VkBufferImageCopy.calloc(1, stack);
+        region
+            .get(0)
+            .bufferOffset(0)
+            .bufferRowLength(0)
+            .bufferImageHeight(0)
+            .imageSubresource()
+            .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+            .mipLevel(0)
+            .baseArrayLayer(0)
+            .layerCount(1);
+        region.get(0).imageOffset().set(0, 0, 0);
+        region.get(0).imageExtent().set(width, height, 1);
+        region.position(0);
+        vkCmdCopyImageToBuffer(
+            cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readbackBuffer, region);
+
+        VulkanContext.checkVk(vkEndCommandBuffer(cmd), "end screenshot cmd");
+        VkSubmitInfo submit =
+            VkSubmitInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_SUBMIT_INFO).pCommandBuffers(cmdPtr);
+        VulkanContext.checkVk(
+            vkQueueSubmit(vulkan.getGraphicsQueue(), submit, VK_NULL_HANDLE), "screenshot submit");
+      } finally {
+        vulkan.waitIdle();
+        vkFreeCommandBuffers(device, commandPool, cmdPtr);
+      }
     }
   }
 
@@ -1440,7 +1571,8 @@ public final class WorldRenderer implements AutoCloseable {
     buffer.put(24, fogR);
     buffer.put(25, fogG);
     buffer.put(26, fogB);
-    buffer.put(27, 1f);
+    float cloudTime = (System.nanoTime() - cloudTimeOriginNanos) * 1e-9f;
+    buffer.put(27, cloudTime);
   }
 
   private void updateSkyUniformBuffer(Player player, int frame) {
@@ -1474,7 +1606,8 @@ public final class WorldRenderer implements AutoCloseable {
     buffer.put(33, SUN_Y / sunLen);
     buffer.put(34, SUN_Z / sunLen);
     buffer.put(35, SUN_ANGULAR_RADIUS);
-    buffer.put(36, 0f);
+    float cloudTime = (System.nanoTime() - cloudTimeOriginNanos) * 1e-9f;
+    buffer.put(36, cloudTime);
     buffer.put(37, 0f);
     buffer.put(38, 0f);
     buffer.put(39, player.isEyeInWater() ? 1f : 0f);
@@ -1589,7 +1722,7 @@ public final class WorldRenderer implements AutoCloseable {
   private void createDescriptorSetLayout() {
     try (MemoryStack stack = stackPush()) {
       org.lwjgl.vulkan.VkDescriptorSetLayoutBinding.Buffer bindings =
-          org.lwjgl.vulkan.VkDescriptorSetLayoutBinding.calloc(2, stack);
+          org.lwjgl.vulkan.VkDescriptorSetLayoutBinding.calloc(3, stack);
       bindings
           .get(0)
           .binding(0)
@@ -1599,6 +1732,12 @@ public final class WorldRenderer implements AutoCloseable {
       bindings
           .get(1)
           .binding(1)
+          .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+          .descriptorCount(1)
+          .stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+      bindings
+          .get(2)
+          .binding(2)
           .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
           .descriptorCount(1)
           .stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -1785,7 +1924,7 @@ public final class WorldRenderer implements AutoCloseable {
   private void createSkyDescriptorSetLayout() {
     try (MemoryStack stack = stackPush()) {
       org.lwjgl.vulkan.VkDescriptorSetLayoutBinding.Buffer bindings =
-          org.lwjgl.vulkan.VkDescriptorSetLayoutBinding.calloc(2, stack);
+          org.lwjgl.vulkan.VkDescriptorSetLayoutBinding.calloc(3, stack);
       bindings
           .get(0)
           .binding(0)
@@ -1795,6 +1934,12 @@ public final class WorldRenderer implements AutoCloseable {
       bindings
           .get(1)
           .binding(1)
+          .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+          .descriptorCount(1)
+          .stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
+      bindings
+          .get(2)
+          .binding(2)
           .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
           .descriptorCount(1)
           .stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -2375,6 +2520,154 @@ public final class WorldRenderer implements AutoCloseable {
     }
   }
 
+  /** Loads {@code textures/sky/clouds.png} (RGBA, tileable) for the scrolling sky cloud layer. */
+  private void createCloudTextureResources() {
+    java.awt.image.BufferedImage img = null;
+    try (InputStream in =
+        WorldRenderer.class.getClassLoader().getResourceAsStream("textures/sky/clouds.png")) {
+      if (in != null) {
+        img = javax.imageio.ImageIO.read(in);
+      }
+    } catch (Exception ignored) {
+      img = null;
+    }
+    final int width = img != null ? img.getWidth() : 64;
+    final int height = img != null ? img.getHeight() : 64;
+    ByteBuffer pixels = org.lwjgl.system.MemoryUtil.memAlloc(width * height * 4);
+    try {
+      if (img != null) {
+        for (int y = 0; y < height; y++) {
+          for (int x = 0; x < width; x++) {
+            int argb = img.getRGB(x, y);
+            int i = (y * width + x) * 4;
+            pixels.put(i, (byte) ((argb >> 16) & 0xff));
+            pixels.put(i + 1, (byte) ((argb >> 8) & 0xff));
+            pixels.put(i + 2, (byte) (argb & 0xff));
+            pixels.put(i + 3, (byte) ((argb >> 24) & 0xff));
+          }
+        }
+      } else {
+        // Soft procedural fallback if the PNG is missing.
+        for (int y = 0; y < height; y++) {
+          for (int x = 0; x < width; x++) {
+            float nx = x / (float) width;
+            float ny = y / (float) height;
+            float n =
+                (float)
+                    (0.5 + 0.5 * Math.sin(nx * 12.0 + ny * 3.0) * Math.cos(ny * 10.0 - nx * 2.0));
+            float dens = Math.max(0f, n - 0.55f) * 2.2f;
+            int a = dens < 0.08f ? 0 : (int) Math.min(200, dens * 220);
+            int i = (y * width + x) * 4;
+            pixels.put(i, (byte) 245);
+            pixels.put(i + 1, (byte) 248);
+            pixels.put(i + 2, (byte) 252);
+            pixels.put(i + 3, (byte) a);
+          }
+        }
+      }
+
+      VkDevice device = vulkan.getDevice();
+      long stagingBuffer = VK_NULL_HANDLE;
+      long stagingMemory = VK_NULL_HANDLE;
+      try (MemoryStack stack = stackPush()) {
+        long imageSize = (long) width * height * 4;
+        stagingBuffer = createBuffer(device, stack, imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        stagingMemory =
+            allocateBufferMemory(
+                vulkan,
+                device,
+                stack,
+                stagingBuffer,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        PointerBuffer mapped = stack.mallocPointer(1);
+        vkMapMemory(device, stagingMemory, 0, imageSize, 0, mapped);
+        ByteBuffer dst = mapped.getByteBuffer(0, (int) imageSize);
+        pixels.rewind();
+        dst.put(pixels);
+        vkUnmapMemory(device, stagingMemory);
+
+        VkImageCreateInfo imageInfo =
+            VkImageCreateInfo.calloc(stack)
+                .imageType(VK_IMAGE_TYPE_2D)
+                .format(VK_FORMAT_R8G8B8A8_UNORM)
+                .arrayLayers(1)
+                .samples(VK_SAMPLE_COUNT_1_BIT)
+                .tiling(VK_IMAGE_TILING_OPTIMAL)
+                .usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
+                .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+        imageInfo.extent().set(width, height, 1);
+        imageInfo.mipLevels(1);
+        LongBuffer image = stack.mallocLong(1);
+        VulkanContext.checkVk(vkCreateImage(device, imageInfo, null, image), "cloud image");
+        cloudImage = image.get(0);
+
+        VkMemoryRequirements memRequirements = VkMemoryRequirements.malloc(stack);
+        vkGetImageMemoryRequirements(device, cloudImage, memRequirements);
+        VkMemoryAllocateInfo allocInfo =
+            VkMemoryAllocateInfo.calloc(stack)
+                .allocationSize(memRequirements.size())
+                .memoryTypeIndex(
+                    vulkan.findMemoryType(
+                        memRequirements.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+        LongBuffer memory = stack.mallocLong(1);
+        VulkanContext.checkVk(vkAllocateMemory(device, allocInfo, null, memory), "cloud memory");
+        cloudImageMemory = memory.get(0);
+        org.lwjgl.vulkan.VK10.vkBindImageMemory(device, cloudImage, cloudImageMemory, 0);
+
+        transitionImageLayout(
+            cloudImage,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT);
+        copyBufferToImage(stagingBuffer, cloudImage, width, height);
+        transitionImageLayout(
+            cloudImage,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT);
+
+        VkImageViewCreateInfo viewInfo =
+            VkImageViewCreateInfo.calloc(stack)
+                .image(cloudImage)
+                .viewType(VK_IMAGE_VIEW_TYPE_2D)
+                .format(VK_FORMAT_R8G8B8A8_UNORM);
+        viewInfo
+            .subresourceRange()
+            .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+            .baseMipLevel(0)
+            .levelCount(1)
+            .baseArrayLayer(0)
+            .layerCount(1);
+        LongBuffer view = stack.mallocLong(1);
+        VulkanContext.checkVk(vkCreateImageView(device, viewInfo, null, view), "cloud view");
+        cloudImageView = view.get(0);
+
+        org.lwjgl.vulkan.VkSamplerCreateInfo samplerInfo =
+            org.lwjgl.vulkan.VkSamplerCreateInfo.calloc(stack)
+                .magFilter(VK_FILTER_NEAREST)
+                .minFilter(VK_FILTER_NEAREST)
+                .addressModeU(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+                .addressModeV(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+                .addressModeW(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+                .mipmapMode(VK_SAMPLER_MIPMAP_MODE_NEAREST)
+                .maxAnisotropy(1f)
+                .borderColor(VK_BORDER_COLOR_INT_OPAQUE_BLACK);
+        LongBuffer sampler = stack.mallocLong(1);
+        VulkanContext.checkVk(vkCreateSampler(device, samplerInfo, null, sampler), "cloud sampler");
+        cloudSampler = sampler.get(0);
+      } finally {
+        if (stagingBuffer != VK_NULL_HANDLE) {
+          vkDestroyBuffer(device, stagingBuffer, null);
+        }
+        if (stagingMemory != VK_NULL_HANDLE) {
+          vkFreeMemory(device, stagingMemory, null);
+        }
+      }
+    } finally {
+      memFree(pixels);
+    }
+  }
+
   private void createUniformBuffers() {
     uniformBuffers = new long[MAX_FRAMES_IN_FLIGHT];
     uniformBuffersMemory = new long[MAX_FRAMES_IN_FLIGHT];
@@ -2400,7 +2693,7 @@ public final class WorldRenderer implements AutoCloseable {
 
   private void createDescriptorPool() {
     try (MemoryStack stack = stackPush()) {
-      // World sets + sky sets (each needs 1 UBO + 1 sampler).
+      // World sets (1 UBO + 2 samplers) + sky sets (1 UBO + 2 samplers).
       org.lwjgl.vulkan.VkDescriptorPoolSize.Buffer poolSizes =
           org.lwjgl.vulkan.VkDescriptorPoolSize.calloc(2, stack);
       poolSizes
@@ -2410,7 +2703,7 @@ public final class WorldRenderer implements AutoCloseable {
       poolSizes
           .get(1)
           .type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-          .descriptorCount(MAX_FRAMES_IN_FLIGHT * 2);
+          .descriptorCount(MAX_FRAMES_IN_FLIGHT * 4);
       poolSizes.position(0);
       org.lwjgl.vulkan.VkDescriptorPoolCreateInfo poolInfo =
           org.lwjgl.vulkan.VkDescriptorPoolCreateInfo.calloc(stack)
@@ -2453,7 +2746,15 @@ public final class WorldRenderer implements AutoCloseable {
             .imageView(textureImageView)
             .sampler(textureSampler);
         imageInfo.position(0);
-        VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(2, stack);
+        org.lwjgl.vulkan.VkDescriptorImageInfo.Buffer cloudInfo =
+            org.lwjgl.vulkan.VkDescriptorImageInfo.calloc(1, stack);
+        cloudInfo
+            .get(0)
+            .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            .imageView(cloudImageView)
+            .sampler(cloudSampler);
+        cloudInfo.position(0);
+        VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(3, stack);
         writes
             .get(0)
             .dstSet(descriptorSets[i])
@@ -2468,6 +2769,13 @@ public final class WorldRenderer implements AutoCloseable {
             .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
             .descriptorCount(1)
             .pImageInfo(imageInfo);
+        writes
+            .get(2)
+            .dstSet(descriptorSets[i])
+            .dstBinding(2)
+            .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+            .descriptorCount(1)
+            .pImageInfo(cloudInfo);
         writes.position(0);
         vkUpdateDescriptorSets(device, writes, null);
       }
@@ -2521,14 +2829,19 @@ public final class WorldRenderer implements AutoCloseable {
         bufferInfo.get(0).buffer(skyUniformBuffers[i]).offset(0).range(SKY_UNIFORM_BUFFER_SIZE);
         bufferInfo.position(0);
         org.lwjgl.vulkan.VkDescriptorImageInfo.Buffer imageInfo =
-            org.lwjgl.vulkan.VkDescriptorImageInfo.calloc(1, stack);
+            org.lwjgl.vulkan.VkDescriptorImageInfo.calloc(2, stack);
         imageInfo
             .get(0)
             .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
             .imageView(sunImageView)
             .sampler(sunSampler);
+        imageInfo
+            .get(1)
+            .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            .imageView(cloudImageView)
+            .sampler(cloudSampler);
         imageInfo.position(0);
-        VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(2, stack);
+        VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(3, stack);
         writes
             .get(0)
             .dstSet(skyDescriptorSets[i])
@@ -2543,6 +2856,21 @@ public final class WorldRenderer implements AutoCloseable {
             .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
             .descriptorCount(1)
             .pImageInfo(imageInfo);
+        org.lwjgl.vulkan.VkDescriptorImageInfo.Buffer cloudInfo =
+            org.lwjgl.vulkan.VkDescriptorImageInfo.calloc(1, stack);
+        cloudInfo
+            .get(0)
+            .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            .imageView(cloudImageView)
+            .sampler(cloudSampler);
+        cloudInfo.position(0);
+        writes
+            .get(2)
+            .dstSet(skyDescriptorSets[i])
+            .dstBinding(2)
+            .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+            .descriptorCount(1)
+            .pImageInfo(cloudInfo);
         writes.position(0);
         vkUpdateDescriptorSets(device, writes, null);
       }
@@ -2697,6 +3025,27 @@ public final class WorldRenderer implements AutoCloseable {
     if (sunImageMemory != VK_NULL_HANDLE) {
       vkFreeMemory(device, sunImageMemory, null);
       sunImageMemory = VK_NULL_HANDLE;
+    }
+    destroyCloudTextureResources();
+  }
+
+  private void destroyCloudTextureResources() {
+    VkDevice device = vulkan.getDevice();
+    if (cloudSampler != VK_NULL_HANDLE) {
+      vkDestroySampler(device, cloudSampler, null);
+      cloudSampler = VK_NULL_HANDLE;
+    }
+    if (cloudImageView != VK_NULL_HANDLE) {
+      vkDestroyImageView(device, cloudImageView, null);
+      cloudImageView = VK_NULL_HANDLE;
+    }
+    if (cloudImage != VK_NULL_HANDLE) {
+      vkDestroyImage(device, cloudImage, null);
+      cloudImage = VK_NULL_HANDLE;
+    }
+    if (cloudImageMemory != VK_NULL_HANDLE) {
+      vkFreeMemory(device, cloudImageMemory, null);
+      cloudImageMemory = VK_NULL_HANDLE;
     }
   }
 

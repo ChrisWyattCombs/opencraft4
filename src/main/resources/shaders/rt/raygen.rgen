@@ -15,15 +15,16 @@ layout(binding = 2) uniform UniformBufferObject {
   mat4 projInverse;
   vec4 cameraPosUnderwater;
   vec4 fogParams;
-  vec4 fogColor;
+  vec4 fogColor; // rgb fog, a = cloudTimeSeconds
   vec4 sunDir;
 } ubo;
+layout(binding = 5) uniform sampler2D cloudSampler;
 
 layout(location = 0) rayPayloadEXT HitPayload hit;
 layout(location = 1) rayPayloadEXT uint shadowed;
 
-const vec3 SUN_COLOR = vec3(1.35, 1.22, 1.05);
-const vec3 AMBIENT = vec3(0.22, 0.26, 0.32);
+const vec3 SUN_COLOR = vec3(1.05, 0.98, 0.88);
+const vec3 AMBIENT = vec3(0.38, 0.42, 0.48);
 
 // Minecraft-style ray budgets: short near-only mirrors, no shadow on mirror hits.
 const float REFLECT_TMAX = 256.0;
@@ -37,7 +38,63 @@ const uint MASK_PRIMARY = 0x07u; // near + water + lod
 const uint MASK_SHADOW = 0x05u;  // near + lod
 const uint MASK_MIRROR = 0x01u;  // near only — keep reflections off the huge LOD AS
 
-vec3 evalSky(vec3 dir) {
+/**
+ * Fixed-altitude cloud boxes: wide/long prisms (large XZ), fixed height slab.
+ * {@code maxT} clips the march so clouds show when looking down onto terrain.
+ */
+vec3 applyClouds(vec3 color, vec3 camPos, vec3 dir, float maxT) {
+  const float cloudBottom = 128.0;
+  const float cloudTop = 136.0;
+  // ~12 blocks per texel (64² map) — wide like the old sky projection.
+  const float invCell = 1.0 / 768.0;
+  const int steps = 14;
+
+  vec3 d = normalize(dir);
+  float tBot = (cloudBottom - camPos.y) / d.y;
+  float tTop = (cloudTop - camPos.y) / d.y;
+  if (abs(d.y) < 1e-4) {
+    if (camPos.y < cloudBottom || camPos.y > cloudTop) {
+      return color;
+    }
+    tBot = 0.0;
+    tTop = min(maxT, 2000.0);
+  }
+  float tNear = min(tBot, tTop);
+  float tFar = max(tBot, tTop);
+  if (tFar < 0.0) {
+    return color;
+  }
+  tNear = max(tNear, 0.0);
+  // Stop at the first surface so looking down from above still sees clouds over ground.
+  tFar = min(tFar, max(maxT, 0.0));
+  tFar = min(tFar, 4000.0);
+  if (tNear >= tFar) {
+    return color;
+  }
+
+  float dt = (tFar - tNear) / float(steps);
+  float transm = 1.0;
+  float time = ubo.fogColor.a;
+  vec3 cloudRgb = vec3(0.96, 0.97, 0.99);
+  for (int i = 0; i < steps; i++) {
+    float t = tNear + (float(i) + 0.5) * dt;
+    vec3 p = camPos + d * t;
+    vec2 uv = p.xz * invCell + time * vec2(0.0022, 0.0007);
+    float dens = step(0.2, texture(cloudSampler, uv).a);
+    float yNorm = (p.y - cloudBottom) / (cloudTop - cloudBottom);
+    float face =
+        mix(0.78, 1.0, smoothstep(0.0, 0.15, yNorm) * (1.0 - smoothstep(0.85, 1.0, yNorm)));
+    float absorb = dens * 0.09 * face;
+    color = color * (1.0 - absorb * transm) + cloudRgb * (absorb * transm);
+    transm *= (1.0 - absorb * 0.8);
+    if (transm < 0.1) {
+      break;
+    }
+  }
+  return color;
+}
+
+vec3 evalSkyEx(vec3 dir, bool underwaterTint) {
   vec3 d = normalize(dir);
   float h = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
   vec3 col = mix(vec3(0.62, 0.78, 0.95), vec3(0.28, 0.52, 0.92), pow(h, 1.15));
@@ -48,12 +105,21 @@ vec3 evalSky(vec3 dir) {
   float sunLen2 = dot(sun, sun);
   if (sunLen2 > 1e-6) {
     sun *= inversesqrt(sunLen2);
-    col += vec3(1.0, 0.88, 0.65) * pow(max(dot(d, sun), 0.0), 12.0) * 0.18;
+    // Sky disc only (does not affect SUN_COLOR block lighting).
+    float sunDot = max(dot(d, sun), 0.0);
+    col += vec3(1.0, 0.90, 0.70) * pow(sunDot, 32.0) * 0.55;   // soft halo
+    col += vec3(1.0, 0.96, 0.82) * pow(sunDot, 256.0) * 3.2;    // bright disc
+    col += vec3(1.0, 0.99, 0.92) * pow(sunDot, 2048.0) * 10.0;  // hot core
   }
-  if (ubo.cameraPosUnderwater.w > 0.5) {
+  // Clouds are applied once along the camera ray in main() (works looking down too).
+  if (underwaterTint) {
     col = mix(col, vec3(0.02, 0.18, 0.35), 0.65);
   }
   return col;
+}
+
+vec3 evalSky(vec3 dir) {
+  return evalSkyEx(dir, ubo.cameraPosUnderwater.w > 0.5);
 }
 
 void traceVis(vec3 origin, vec3 dir, uint cullMask) {
@@ -105,9 +171,10 @@ vec3 shadeOpaque(vec3 camPos, vec3 sunDir) {
   vec3 albedo = hit.albedo.rgb;
   vec3 hitPos = hit.hit.xyz;
   float sunVis = traceShadow(hitPos, sunDir);
-  vec3 lighting = AMBIENT * face + SUN_COLOR * face * sunVis * 0.95;
-  lighting = mix(lighting, lighting * 0.22, 1.0 - sunVis);
-  vec3 shaded = max(albedo * lighting, vec3(0.02));
+  // Mid key + fill: brighter than the soft pass, still below the old blown sun.
+  vec3 lighting = AMBIENT * face + SUN_COLOR * face * sunVis * 0.82;
+  lighting = mix(lighting, lighting * 0.62, 1.0 - sunVis);
+  vec3 shaded = max(albedo * lighting, vec3(0.045));
   if (ubo.cameraPosUnderwater.w > 0.5) {
     shaded = mix(shaded, vec3(0.04, 0.22, 0.42), 0.52);
     shaded *= vec3(0.55, 0.8, 1.05);
@@ -119,8 +186,8 @@ vec3 shadeOpaqueFast(vec3 camPos) {
   float face = hit.albedo.a;
   vec3 albedo = hit.albedo.rgb;
   vec3 hitPos = hit.hit.xyz;
-  vec3 lighting = AMBIENT * face + SUN_COLOR * face * 0.55;
-  vec3 shaded = max(albedo * lighting, vec3(0.02));
+  vec3 lighting = AMBIENT * face + SUN_COLOR * face * 0.50;
+  vec3 shaded = max(albedo * lighting, vec3(0.045));
   return fogBlend(shaded, hitPos, camPos);
 }
 
@@ -170,6 +237,9 @@ void main() {
   vec3 color = vec3(0.0);
   vec3 throughput = vec3(1.0);
   bool done = false;
+  // Camera-ray cloud march (so looking down from above still composites clouds).
+  vec3 cloudRayDir = direction;
+  float cloudMaxT = 1.0e6;
 
   // At most: primary + (mirror OR transmission) + optional primary shadow.
   for (int bounce = 0; bounce < 2 && !done; bounce++) {
@@ -178,6 +248,9 @@ void main() {
 
     float matId = hit.hit.w;
     if (matId < 0.5) {
+      if (bounce == 0) {
+        cloudMaxT = 1.0e6;
+      }
       color += throughput * hit.albedo.rgb;
       done = true;
       break;
@@ -185,33 +258,76 @@ void main() {
 
     vec3 hitPos = hit.hit.xyz;
     float dist = length(hitPos - camPos);
+    if (bounce == 0) {
+      cloudMaxT = dist;
+    }
     float fogStart = ubo.fogParams.x;
     float fogEnd = max(ubo.fogParams.y, fogStart + 1.0);
     float fog = clamp((dist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
     fog = fog * fog * (3.0 - 2.0 * fog);
 
     if (matId > 1.5) {
+      // water.rchit already orients N toward the viewer (+Y above, -Y from below).
       vec3 N = normalize(hit.normal.xyz);
       vec3 V = normalize(-direction);
-      if (dot(N, V) < 0.0) {
-        N = -N;
-      }
       float cosTheta = clamp(dot(N, V), 0.0, 1.0);
-      // Stronger mirror response so shores read clearly.
-      float fresnel = mix(0.28, 0.90, pow(1.0 - cosTheta, 2.0));
       const float waterOpacity = 0.38;
       vec3 tint = hit.albedo.rgb;
+      const vec3 UP = vec3(0.0, 1.0, 0.0);
+      bool underwaterCam = ubo.cameraPosUnderwater.w > 0.5;
+      // Underside: flipped normal points down. Also trust the camera flag.
+      bool fromBelow = underwaterCam || N.y < 0.0;
+
+      // Submerged look-up: never scene-mirror the seabed — exit to sky with underwater tint.
+      if (fromBelow) {
+        // N already faces the incident ray (toward the camera under the surface).
+        vec3 exitDir = refract(direction, N, 1.333);
+        if (dot(exitDir, exitDir) < 1e-6 || exitDir.y < 0.05) {
+          // TIR / downward refract — force a skyward exit, never toward the bed.
+          exitDir = normalize(mix(direction, UP, 0.65));
+          if (exitDir.y < 0.1) {
+            exitDir = UP;
+          }
+        }
+        vec3 above = evalSkyEx(exitDir, false);
+        float open = clamp(0.40 + 0.50 * cosTheta, 0.30, 0.92);
+        vec3 waterLayer = mix(tint, above, open);
+        waterLayer = mix(waterLayer, vec3(0.03, 0.20, 0.40), 0.40);
+        waterLayer = mix(waterLayer, ubo.fogColor.rgb, fog * 0.35);
+        float upDot = max(dot(exitDir, SUN_DIR), 0.0);
+        waterLayer += vec3(1.0, 0.92, 0.7) * pow(upDot, 24.0) * 0.12 * open;
+
+        if (bounce == 0) {
+          float seeThrough = clamp(0.50 + 0.30 * cosTheta, 0.45, 0.85);
+          color += throughput * waterLayer * (1.0 - seeThrough);
+          // Push above the surface along world up so the next ray cannot hitch the bed.
+          origin = hitPos + UP * 0.25;
+          direction = exitDir;
+          throughput *= seeThrough * vec3(0.55, 0.78, 0.95);
+          continue;
+        }
+        color += throughput * waterLayer;
+        done = true;
+        break;
+      }
+
+      float fresnel = mix(0.28, 0.90, pow(1.0 - cosTheta, 2.0));
       vec3 R = normalize(reflect(direction, N));
+      // Guard: never use a downward mirror ray for above-water shading either.
+      if (R.y < 0.0) {
+        R = normalize(mix(R, UP, 0.85));
+      }
 
       vec3 H = normalize(V + SUN_DIR);
       float spec = pow(clamp(dot(N, H), 0.0, 1.0), 120.0);
-      vec3 specular = vec3(1.0, 0.95, 0.8) * spec * (0.35 + 0.65 * fresnel);
+      vec3 specular = vec3(1.0, 0.95, 0.8) * spec * (0.22 + 0.42 * fresnel);
 
-      // 1/4 checkerboard scene mirrors (near voxels only). Safe budget + visible.
+      // 1/4 checkerboard scene mirrors — above-water only (fromBelow already returned).
       bool sparseMirror =
           bounce == 0
           && fresnel > 0.22
           && dist < REFLECT_MAX_CAM_DIST
+          && R.y > 0.05
           && ((gl_LaunchIDEXT.x & 1u) == 0u)
           && ((gl_LaunchIDEXT.y & 1u) == 0u);
 
@@ -220,12 +336,10 @@ void main() {
         reflected = traceWaterReflection(hitPos + N * 0.12, R, camPos);
         reflected = mix(reflected, evalSky(R), 0.08);
       } else if (fresnel > 0.35) {
-        // Non-sample pixels still get sky mirror so water never looks matte.
         reflected = evalSky(R);
       }
 
       float bodyW = waterOpacity * (1.0 - fresnel * 0.25);
-      // Never stack mirror TraceRay + transmission TraceRay on the same pixel.
       bool doTransmit = bounce == 0 && !sparseMirror && fresnel < 0.60;
 
       vec3 waterLayer = mix(tint, reflected, fresnel) + specular;
@@ -260,6 +374,9 @@ void main() {
   if (!done) {
     color += throughput * evalSky(direction);
   }
+
+  // Volume clouds along the original camera ray (below or above the layer).
+  color = applyClouds(color, camPos, cloudRayDir, cloudMaxT);
 
   if (ubo.cameraPosUnderwater.w > 0.5) {
     color = mix(color, vec3(0.04, 0.22, 0.42), 0.25);

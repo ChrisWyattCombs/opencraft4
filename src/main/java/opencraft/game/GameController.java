@@ -1,9 +1,9 @@
 package opencraft.game;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import opencraft.AppDirectories;
+import opencraft.DiagLog;
 import opencraft.graphics.Display;
 import opencraft.graphics.render.ShaderCompiler;
 import opencraft.graphics.render.TextureAtlas;
@@ -40,6 +40,7 @@ public final class GameController implements AutoCloseable {
   private long startingSinceNanos;
   private long lastWaitLogNanos;
   private float fpsSmoothed = 60f;
+  private int playingDiagFrames;
 
   /**
    * Creates a controller for the given display and save root.
@@ -97,26 +98,26 @@ public final class GameController implements AutoCloseable {
           float instant = 1f / deltaSeconds;
           fpsSmoothed = fpsSmoothed * 0.9f + instant * 0.1f;
         }
-        gui.updateHud(fpsSmoothed, session.getMeshCount());
-        ByteBuffer hud = gui.lockHudPixels();
-        try {
-          if (hud != null) {
-            session.setHudOverlay(
-                hud, gui.hudPixelWidth(), gui.hudPixelHeight(), gui.hudRowBytes());
-          } else {
-            session.setHudOverlay(null, 0, 0, 0);
-          }
-          session.update(deltaSeconds);
-          session.render();
-        } finally {
-          gui.unlockHudPixels();
-          session.setHudOverlay(null, 0, 0, 0);
+        // Ultralight HUD/input is paused during PLAYING (ucrtbase abort risk).
+        session.setHudOverlay(null, 0, 0, 0);
+        if ((++playingDiagFrames % 120) == 1) {
+          DiagLog.logQuiet(
+              "playing tick#"
+                  + playingDiagFrames
+                  + " meshes="
+                  + session.getMeshCount()
+                  + " fps="
+                  + Math.round(fpsSmoothed));
         }
+        session.update(deltaSeconds);
+        session.render();
         if (session.consumeReturnToMenuRequest()) {
+          DiagLog.log("playing → menu requested");
           returnToMainMenu();
         }
       } catch (Throwable e) {
         e.printStackTrace();
+        DiagLog.log("playing EXCEPTION " + e);
         restoreMenuAfterFailedStart(e.getMessage() == null ? "Render failed" : e.getMessage());
       }
       return;
@@ -279,7 +280,9 @@ public final class GameController implements AutoCloseable {
 
   private void enterPlaying(World world) {
     pendingWorld = null;
+    playingDiagFrames = 0;
     System.out.println("[Opencraft] Handoff: attach prewarmed renderer...");
+    DiagLog.log("enterPlaying begin");
     try {
       display.ensurePresenter();
       gui.update();
@@ -292,16 +295,22 @@ public final class GameController implements AutoCloseable {
       display.releasePresenter();
       // Ensure no in-flight UI presents race the first world acquire.
       display.getVulkanContext().waitIdle();
+      // Stop Ultralight before world present loop — prevents ucrtbase BEX64 during PLAYING.
+      gui.pauseForGameplay();
+      DiagLog.log("enterPlaying ultralight paused");
       System.out.println("[Opencraft] First world frame...");
       session.update(0f);
       session.render();
       phase = Phase.PLAYING;
+      DiagLog.log("enterPlaying PLAYING");
       System.out.println("[Opencraft] Entered PLAYING");
     } catch (Throwable e) {
       e.printStackTrace();
+      DiagLog.log("enterPlaying failed " + e);
       if (session != null) {
         session = null;
       }
+      gui.resumeForMenu();
       restoreMenuAfterFailedStart(e.getMessage() == null ? "Failed to start" : e.getMessage());
     }
   }
@@ -327,6 +336,8 @@ public final class GameController implements AutoCloseable {
     startError = null;
     pendingWorld = null;
     loadingUiShown = false;
+    gui.resumeForMenu();
+    DiagLog.log("returnToMainMenu ultralight resumed");
     if (worldRenderer == null) {
       try {
         worldRenderer =
@@ -358,6 +369,9 @@ public final class GameController implements AutoCloseable {
     createUsed = false;
     startError = null;
     pendingWorld = null;
+    if (gui != null) {
+      gui.resumeForMenu();
+    }
     if (session != null) {
       worldRenderer = null;
       try {

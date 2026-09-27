@@ -232,10 +232,10 @@ public final class GameSession implements AutoCloseable {
       input |= Player.INPUT_BACKWARD;
     }
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-      input |= Player.INPUT_LEFT;
+      input |= Player.INPUT_RIGHT;
     }
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-      input |= Player.INPUT_RIGHT;
+      input |= Player.INPUT_LEFT;
     }
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
       input |= Player.INPUT_JUMP;

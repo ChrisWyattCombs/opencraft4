@@ -9,7 +9,7 @@ layout(binding = 0) uniform UniformBufferObject {
   mat4 mvp;
   vec4 cameraPosUnderwater; // xyz = camera, w = underwater
   vec4 fogParams;           // x = fogStart, y = fogEnd, z = tileSpanU, w = tileSpanV
-  vec4 fogColor;            // rgb = fog, a unused
+  vec4 fogColor;            // rgb = fog, a = cloudTimeSeconds
 } ubo;
 
 layout(location = 0) out vec2 fragUvMin;

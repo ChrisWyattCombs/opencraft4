@@ -63,6 +63,7 @@ public final class Main {
           controller.tick(dt);
         }
         DiagLog.log("main loop exit clean");
+        DiagLog.markCleanExit();
       }
     } catch (Throwable t) {
       DiagLog.log("main fatal " + t);

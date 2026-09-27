@@ -208,6 +208,8 @@ public final class RtWorldPass implements AutoCloseable {
 
   private long textureImageView = VK_NULL_HANDLE;
   private long textureSampler = VK_NULL_HANDLE;
+  private long cloudImageView = VK_NULL_HANDLE;
+  private long cloudSampler = VK_NULL_HANDLE;
 
   private boolean sceneDirty = true;
 
@@ -237,16 +239,41 @@ public final class RtWorldPass implements AutoCloseable {
     }
   }
 
+  /**
+   * Binds the block texture atlas used by opaque/water hit shaders.
+   *
+   * @param imageView atlas image view
+   * @param sampler atlas sampler
+   */
   public void setTexture(long imageView, long sampler) {
     this.textureImageView = imageView;
     this.textureSampler = sampler;
     updateDescriptors();
   }
 
+  /**
+   * Binds the scrolling sky cloud texture (shared with the raster sky pass).
+   *
+   * @param imageView cloud image view
+   * @param sampler repeating cloud sampler
+   */
+  public void setCloudTexture(long imageView, long sampler) {
+    this.cloudImageView = imageView;
+    this.cloudSampler = sampler;
+    updateDescriptors();
+  }
+
+  /** Marks the TLAS dirty so the next {@link #prepareFrame} rebuilds acceleration structures. */
   public void markSceneDirty() {
     sceneDirty = true;
   }
 
+  /**
+   * Ensures the half-res trace target and full-res present image match the window size.
+   *
+   * @param width present width in pixels
+   * @param height present height in pixels
+   */
   public void ensureOutputSize(int width, int height) {
     width = Math.max(1, width);
     height = Math.max(1, height);
@@ -268,17 +295,35 @@ public final class RtWorldPass implements AutoCloseable {
     updateDescriptors();
   }
 
+  /**
+   * Returns the full-resolution RT present image (TRANSFER_SRC after {@link #recordTrace}).
+   *
+   * @return Vulkan image handle
+   */
   public long getOutputImage() {
     return outputImage;
   }
 
+  /**
+   * Returns the full-resolution RT present width in pixels.
+   *
+   * @return width
+   */
   public int getOutputWidth() {
     return outputWidth;
   }
 
+  /**
+   * Returns the full-resolution RT present height in pixels.
+   *
+   * @return height
+   */
   public int getOutputHeight() {
     return outputHeight;
   }
+
+  /** Max new BLASes built per frame to avoid multi-second stalls when chunks stream in. */
+  private static final int MAX_BLAS_BUILDS_PER_FRAME = 6;
 
   /**
    * Ensures BLASes exist for meshes, rebuilds TLAS if needed, updates camera UBO.
@@ -287,16 +332,14 @@ public final class RtWorldPass implements AutoCloseable {
    * @param player camera
    * @param fogStart fog start distance
    * @param fogEnd fog end distance
-   * @param fogR fog color
-   * @param fogG fog color
-   * @param fogB fog color
+   * @param fogR fog color red
+   * @param fogG fog color green
+   * @param fogB fog color blue
    * @param underwater underwater flag
    * @param tileSpanU atlas tile U span
    * @param tileSpanV atlas tile V span
+   * @param cloudTimeSeconds scrolling cloud layer time in seconds
    */
-  /** Max new BLASes built per frame to avoid multi-second stalls when chunks stream in. */
-  private static final int MAX_BLAS_BUILDS_PER_FRAME = 6;
-
   public void prepareFrame(
       Collection<GpuRegionMesh> meshes,
       Player player,
@@ -307,7 +350,8 @@ public final class RtWorldPass implements AutoCloseable {
       float fogB,
       boolean underwater,
       float tileSpanU,
-      float tileSpanV) {
+      float tileSpanV,
+      float cloudTimeSeconds) {
     List<GpuRegionMesh> list = new ArrayList<>();
     boolean builtAny = false;
     int buildsLeft = MAX_BLAS_BUILDS_PER_FRAME;
@@ -351,7 +395,17 @@ public final class RtWorldPass implements AutoCloseable {
     } else if (pendingBuilds) {
       sceneDirty = true;
     }
-    updateUbo(player, fogStart, fogEnd, fogR, fogG, fogB, underwater, tileSpanU, tileSpanV);
+    updateUbo(
+        player,
+        fogStart,
+        fogEnd,
+        fogR,
+        fogG,
+        fogB,
+        underwater,
+        tileSpanU,
+        tileSpanV,
+        cloudTimeSeconds);
   }
 
   public boolean hasGeometry() {
@@ -582,7 +636,7 @@ public final class RtWorldPass implements AutoCloseable {
   private void createDescriptorLayout() {
     VkDevice device = vulkan.getDevice();
     try (MemoryStack stack = stackPush()) {
-      VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(5, stack);
+      VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(6, stack);
       bindings
           .get(0)
           .binding(0)
@@ -621,6 +675,12 @@ public final class RtWorldPass implements AutoCloseable {
           .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
           .descriptorCount(1)
           .stageFlags(VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR);
+      bindings
+          .get(5)
+          .binding(5)
+          .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+          .descriptorCount(1)
+          .stageFlags(VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR);
       bindings.position(0);
 
       VkDescriptorSetLayoutCreateInfo info =
@@ -949,7 +1009,7 @@ public final class RtWorldPass implements AutoCloseable {
       sizes.get(0).type(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(1);
       sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1);
       sizes.get(2).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1);
-      sizes.get(3).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1);
+      sizes.get(3).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(2);
       sizes.get(4).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1);
       sizes.position(0);
       VkDescriptorPoolCreateInfo poolInfo =
@@ -1107,13 +1167,15 @@ public final class RtWorldPass implements AutoCloseable {
     if (descriptorSet == VK_NULL_HANDLE) {
       return;
     }
-    // Skip until we have something to bind for AS / half-res storage / texture.
-    if (traceImageView == VK_NULL_HANDLE || textureImageView == VK_NULL_HANDLE) {
+    // Skip until we have something to bind for AS / half-res storage / texture / clouds.
+    if (traceImageView == VK_NULL_HANDLE
+        || textureImageView == VK_NULL_HANDLE
+        || cloudImageView == VK_NULL_HANDLE) {
       return;
     }
     VkDevice device = vulkan.getDevice();
     try (MemoryStack stack = stackPush()) {
-      VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(5, stack);
+      VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(6, stack);
       int writeCount = 0;
 
       if (!tlas.isEmpty()) {
@@ -1190,6 +1252,23 @@ public final class RtWorldPass implements AutoCloseable {
         writeCount++;
       }
 
+      VkDescriptorImageInfo.Buffer cloudInfo = VkDescriptorImageInfo.calloc(1, stack);
+      cloudInfo
+          .get(0)
+          .imageView(cloudImageView)
+          .sampler(cloudSampler)
+          .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+      cloudInfo.position(0);
+      writes
+          .get(writeCount)
+          .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+          .dstSet(descriptorSet)
+          .dstBinding(5)
+          .descriptorCount(1)
+          .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+          .pImageInfo(cloudInfo);
+      writeCount++;
+
       writes.limit(writeCount).position(0);
       vkUpdateDescriptorSets(device, writes, null);
     }
@@ -1204,7 +1283,8 @@ public final class RtWorldPass implements AutoCloseable {
       float fogB,
       boolean underwater,
       float tileSpanU,
-      float tileSpanV) {
+      float tileSpanV,
+      float cloudTimeSeconds) {
     float aspect = outputWidth / (float) Math.max(1, outputHeight);
     Matrix4f proj =
         new Matrix4f()
@@ -1237,7 +1317,7 @@ public final class RtWorldPass implements AutoCloseable {
     fb.put(40, fogR);
     fb.put(41, fogG);
     fb.put(42, fogB);
-    fb.put(43, 1f);
+    fb.put(43, cloudTimeSeconds);
     float sunLen = (float) Math.sqrt(SUN_X * SUN_X + SUN_Y * SUN_Y + SUN_Z * SUN_Z);
     fb.put(44, SUN_X / sunLen);
     fb.put(45, SUN_Y / sunLen);

@@ -4,10 +4,11 @@ layout(binding = 0) uniform SkyUBO {
   mat4 viewInverse;
   mat4 projInverse;
   vec4 sunDir;      // xyz = direction toward sun, w = disc angular radius
-  vec4 cameraUnder; // w = underwater
+  vec4 cameraUnder; // x = cloudTimeSeconds, w = underwater
 } ubo;
 
 layout(binding = 1) uniform sampler2D sunSampler;
+layout(binding = 2) uniform sampler2D cloudSampler;
 
 layout(location = 0) in vec2 inNdc;
 layout(location = 0) out vec4 outColor;
@@ -28,11 +29,66 @@ vec3 skyColor(vec3 dir) {
   return col;
 }
 
+/**
+ * Fixed-altitude cloud boxes: wide/long prisms, fixed height.
+ * {@code maxT} clips so clouds appear when looking down onto the world.
+ */
+vec3 applyClouds(vec3 color, vec3 camPos, vec3 dir, float time, float maxT) {
+  const float cloudBottom = 128.0;
+  const float cloudTop = 136.0;
+  const float invCell = 1.0 / 768.0;
+  const int steps = 14;
+
+  vec3 d = normalize(dir);
+  float tBot = (cloudBottom - camPos.y) / d.y;
+  float tTop = (cloudTop - camPos.y) / d.y;
+  if (abs(d.y) < 1e-4) {
+    if (camPos.y < cloudBottom || camPos.y > cloudTop) {
+      return color;
+    }
+    tBot = 0.0;
+    tTop = min(maxT, 2000.0);
+  }
+  float tNear = min(tBot, tTop);
+  float tFar = max(tBot, tTop);
+  if (tFar < 0.0) {
+    return color;
+  }
+  tNear = max(tNear, 0.0);
+  tFar = min(tFar, max(maxT, 0.0));
+  tFar = min(tFar, 4000.0);
+  if (tNear >= tFar) {
+    return color;
+  }
+
+  float dt = (tFar - tNear) / float(steps);
+  float transm = 1.0;
+  vec3 cloudRgb = vec3(0.96, 0.97, 0.99);
+  for (int i = 0; i < steps; i++) {
+    float t = tNear + (float(i) + 0.5) * dt;
+    vec3 p = camPos + d * t;
+    vec2 uv = p.xz * invCell + time * vec2(0.0022, 0.0007);
+    float dens = step(0.2, texture(cloudSampler, uv).a);
+    float yNorm = (p.y - cloudBottom) / (cloudTop - cloudBottom);
+    float face =
+        mix(0.78, 1.0, smoothstep(0.0, 0.15, yNorm) * (1.0 - smoothstep(0.85, 1.0, yNorm)));
+    float absorb = dens * 0.09 * face;
+    color = color * (1.0 - absorb * transm) + cloudRgb * (absorb * transm);
+    transm *= (1.0 - absorb * 0.8);
+    if (transm < 0.1) {
+      break;
+    }
+  }
+  return color;
+}
+
 void main() {
   vec4 target = ubo.projInverse * vec4(inNdc, 1.0, 1.0);
   vec3 dir = normalize(mat3(ubo.viewInverse) * normalize(target.xyz));
+  vec3 camPos = ubo.viewInverse[3].xyz;
 
   vec3 color = skyColor(dir);
+  color = applyClouds(color, camPos, dir, ubo.cameraUnder.x, 1.0e6);
 
   // Voxel sun disc billboarded in direction space via angular map.
   vec3 sun = normalize(ubo.sunDir.xyz);

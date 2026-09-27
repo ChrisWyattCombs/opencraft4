@@ -14,7 +14,9 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Durable diagnostic log for silent native kills (TDR / {@code ucrtbase} abort).
  *
- * <p>Writes are flushed and fsynced so the last breadcrumb survives process death.
+ * <p>Writes are flushed and fsynced so the last breadcrumb survives process death. A small session
+ * marker file tracks whether the previous run exited cleanly — silent kills skip Java shutdown
+ * hooks, so a leftover {@code RUNNING} marker is the signal.
  */
 public final class DiagLog {
 
@@ -22,9 +24,13 @@ public final class DiagLog {
   private static final Object LOCK = new Object();
   private static final AtomicBoolean HEARTBEAT_STARTED = new AtomicBoolean(false);
   private static final AtomicLong HEARTBEAT_SEQ = new AtomicLong();
+  private static final AtomicBoolean CLEAN_EXIT = new AtomicBoolean(false);
 
   private static Path logFile;
+  private static Path sessionFile;
+  private static Path quitLogFile;
   private static volatile String lastMark = "init";
+  private static String lastSilentQuitNotice;
 
   private DiagLog() {}
 
@@ -39,12 +45,25 @@ public final class DiagLog {
         Path dir = projectRoot.resolve("run");
         Files.createDirectories(dir);
         logFile = dir.resolve("diag.log");
+        sessionFile = dir.resolve("diag.session");
+        quitLogFile = dir.resolve("quit.log");
+        detectSilentQuitLocked();
         Files.writeString(
             logFile,
             "=== Opencraft diag " + LocalDateTime.now() + " ===\n",
             StandardCharsets.UTF_8,
             StandardOpenOption.CREATE,
             StandardOpenOption.TRUNCATE_EXISTING);
+        if (lastSilentQuitNotice != null) {
+          try (FileOutputStream fos = new FileOutputStream(logFile.toFile(), true)) {
+            byte[] bytes = ("BOOT " + lastSilentQuitNotice + "\n").getBytes(StandardCharsets.UTF_8);
+            fos.write(bytes);
+            fos.flush();
+            fos.getFD().sync();
+          }
+          lastSilentQuitNotice = null;
+        }
+        writeSessionLocked("RUNNING", "boot");
       } catch (IOException e) {
         System.err.println("[Opencraft] diag log init failed: " + e.getMessage());
         logFile = null;
@@ -55,8 +74,37 @@ public final class DiagLog {
     Runtime.getRuntime()
         .addShutdownHook(
             new Thread(
-                () -> log("shutdown-hook lastMark=" + lastMark + " hb=" + HEARTBEAT_SEQ.get()),
+                () -> {
+                  if (CLEAN_EXIT.get()) {
+                    write("shutdown-hook clean lastMark=" + lastMark, true, false);
+                  } else {
+                    // JVM exiting without markCleanExit — hook may still run for some deaths.
+                    write(
+                        "shutdown-hook UNCLEAN lastMark="
+                            + lastMark
+                            + " hb="
+                            + HEARTBEAT_SEQ.get()
+                            + " (native abort often skips this hook)",
+                        true,
+                        false);
+                    writeSessionBestEffort("UNCLEAN_SHUTDOWN", lastMark);
+                    appendQuitBestEffort("UNCLEAN_SHUTDOWN lastMark=" + lastMark);
+                  }
+                },
                 "diag-shutdown"));
+  }
+
+  /**
+   * Records that the process is leaving through a normal Java path (window closed, etc.).
+   *
+   * <p>Call this before returning from {@code main}. Silent native kills never reach this, so the
+   * session file stays {@code RUNNING} for the next launch to report.
+   */
+  public static void markCleanExit() {
+    CLEAN_EXIT.set(true);
+    write("CLEAN_EXIT lastMark=" + lastMark + " hb=" + HEARTBEAT_SEQ.get(), true, false);
+    writeSessionBestEffort("CLEAN_EXIT", lastMark);
+    appendQuitBestEffort("CLEAN_EXIT lastMark=" + lastMark);
   }
 
   /**
@@ -137,6 +185,86 @@ public final class DiagLog {
     }
   }
 
+  /** On boot: if the previous session never cleared RUNNING, report a silent quit. */
+  private static void detectSilentQuitLocked() {
+    if (sessionFile == null || !Files.isRegularFile(sessionFile)) {
+      return;
+    }
+    try {
+      String prev = Files.readString(sessionFile, StandardCharsets.UTF_8).trim();
+      if (prev.startsWith("RUNNING")) {
+        lastSilentQuitNotice =
+            "PREVIOUS RUN SILENT QUIT — session left RUNNING; last=" + prev.replace('\n', ' ');
+        System.out.println("[diag] !!! " + lastSilentQuitNotice);
+        appendQuitLocked("SILENT_QUIT " + prev.replace('\n', ' '));
+        Files.writeString(
+            sessionFile.resolveSibling("diag.last-silent-quit.txt"),
+            LocalDateTime.now() + "\n" + prev + "\n",
+            StandardCharsets.UTF_8,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING);
+      }
+    } catch (IOException e) {
+      System.err.println("[Opencraft] silent-quit detect failed: " + e.getMessage());
+    }
+  }
+
+  private static void writeSessionBestEffort(String state, String mark) {
+    synchronized (LOCK) {
+      writeSessionLocked(state, mark);
+    }
+  }
+
+  private static void writeSessionLocked(String state, String mark) {
+    if (sessionFile == null) {
+      return;
+    }
+    try {
+      String body =
+          state
+              + "\n"
+              + "time="
+              + LocalDateTime.now()
+              + "\n"
+              + "lastMark="
+              + mark
+              + "\n"
+              + "hb="
+              + HEARTBEAT_SEQ.get()
+              + "\n";
+      try (FileOutputStream fos = new FileOutputStream(sessionFile.toFile(), false)) {
+        fos.write(body.getBytes(StandardCharsets.UTF_8));
+        fos.flush();
+        fos.getFD().sync();
+      }
+    } catch (IOException e) {
+      System.err.println("[Opencraft] session write failed: " + e.getMessage());
+    }
+  }
+
+  private static void appendQuitBestEffort(String message) {
+    synchronized (LOCK) {
+      appendQuitLocked(message);
+    }
+  }
+
+  private static void appendQuitLocked(String message) {
+    if (quitLogFile == null) {
+      return;
+    }
+    try {
+      String line = LocalDateTime.now() + " " + message + "\n";
+      Files.writeString(
+          quitLogFile,
+          line,
+          StandardCharsets.UTF_8,
+          StandardOpenOption.CREATE,
+          StandardOpenOption.APPEND);
+    } catch (IOException e) {
+      System.err.println("[Opencraft] quit log write failed: " + e.getMessage());
+    }
+  }
+
   /** Starts a daemon heartbeat thread that records wall-clock pulses to the diag log. */
   private static void startHeartbeat() {
     if (!HEARTBEAT_STARTED.compareAndSet(false, true)) {
@@ -148,11 +276,14 @@ public final class DiagLog {
               while (!Thread.currentThread().isInterrupted()) {
                 long n = HEARTBEAT_SEQ.incrementAndGet();
                 // Pulse so we know wall-clock vs last mark if abort is silent.
-                if (n % 4 == 0) {
+                if (n % 2 == 0) {
                   write("heartbeat n=" + n + " lastMark=" + lastMark, false, false);
+                  if (!CLEAN_EXIT.get()) {
+                    writeSessionBestEffort("RUNNING", lastMark);
+                  }
                 }
                 try {
-                  Thread.sleep(250);
+                  Thread.sleep(200);
                 } catch (InterruptedException e) {
                   Thread.currentThread().interrupt();
                   return;
